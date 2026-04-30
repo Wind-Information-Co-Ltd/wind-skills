@@ -15,7 +15,7 @@
 | [`wind-find-finance-skill`](./skills/wind-find-finance-skill) | **金融能力入口**：列举平台所有 skill 并按用户问题推荐，引导安装 / 升级 |
 | [`wind-mcp-skill`](./skills/wind-mcp-skill) | **访问万得 Wind 金融数据**：股票（行情与财务）、基金（行情与全维数据）、公司公告与新闻、宏观经济指标 |
 
-### 金融分析类（社区 winus 收录）
+### 金融分析类
 
 | Skill | 一句话 |
 |---|---|
@@ -60,11 +60,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-find-fin
 
 装好后，用户直接问金融问题即可。AI 会通过 SKILL.md 守则按用户问题筛 1-3 个相关 skill 推荐安装。
 
-机器可读引导文件见 [`README-skills.md`](./README-skills.md)。可发布到：
-
-```text
-https://aimarket.wind.com.cn/
-```
+机器可读引导文件见 [`README-skills.md`](./README-skills.md)（在线：<https://aimarket.wind.com.cn/skill.md>）。
 
 ### 装单个 skill
 
@@ -131,7 +127,7 @@ mkdir -p ~/.wind-aimarket && echo "WIND_API_KEY=ak_xxx" > ~/.wind-aimarket/confi
 
 ---
 
-## 📂 目录结构（v6.0 平铺）
+## 📂 目录结构
 
 ```
 wind-skills/
@@ -163,17 +159,6 @@ wind-skills/
 - ✅ OpenClaw
 - ✅ Hermes Agent
 - 🔄 其他遵循 [Anthropic Skill 规范](https://github.com/vercel-labs/skills) 的 agent 理论上可用
-
----
-
-## 🗺️ 路线图
-
-- [x] 全平台 SKILL.md 守则驱动，AI 按问题自动路由
-- [x] wind-mcp-skill：访问万得 Wind 全维金融数据
-- [x] 顶层 `README-skills.md` 双路径引导（发现器 / 直接装数据 skill）
-- [ ] 触发率回归测试集（50 条真实金融问句）
-- [ ] 将 `README-skills.md` 发布到 `https://aimarket.wind.com.cn/`
-- [ ] 评估收录第三方数据源作为可选数据 skill
 
 ---
 
