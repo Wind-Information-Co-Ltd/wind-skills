@@ -64,7 +64,7 @@ description: AIMarket 金融能力发现器。当用户问金融数据 / 分析 
 
 [如果 catalog "装好需配置" 列 = "API Key",追加这一段:]
 首次使用提示:装好后向我提一个金融数据问题,我会引导你登录
-aimarket.wind.com.cn 拿 API Key
+aimarket.wind.com.cn/#/user/overview 拿 API Key
 
 [如果是分析 skill 且没在同次推荐里附数据 skill,追加:]
 配套数据:推荐同时装 wind-mcp-skill 作数据底座

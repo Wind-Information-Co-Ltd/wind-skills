@@ -60,10 +60,10 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-find-fin
 
 装好后，用户直接问金融问题即可。AI 会通过 SKILL.md 守则按用户问题筛 1-3 个相关 skill 推荐安装。
 
-机器可读引导文件见 [`README-skills.md`](./README-skills.md)。可发布到：
+机器可读引导文件见 [`README-skills.md`](./README-skills.md)。已发布到：
 
 ```text
-https://aimarket.wind.com.cn/
+https://aimarket.wind.com.cn/skill.md
 ```
 
 ### 装单个 skill
@@ -172,7 +172,7 @@ wind-skills/
 - [x] wind-mcp-skill：访问万得 Wind 全维金融数据
 - [x] 顶层 `README-skills.md` 双路径引导（发现器 / 直接装数据 skill）
 - [ ] 触发率回归测试集（50 条真实金融问句）
-- [ ] 将 `README-skills.md` 发布到 `https://aimarket.wind.com.cn/`
+- [x] 将 `README-skills.md` 发布到 `https://aimarket.wind.com.cn/skill.md`
 - [ ] 评估收录第三方数据源作为可选数据 skill
 
 ---

@@ -32,7 +32,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 > 装到当前目录下，仅当前项目内的 AI agent 能识别。
 
-需要 `WIND_API_KEY`（登录 https://aimarket.wind.com.cn 开发者中心获取）。
+需要 `WIND_API_KEY`（登录 https://aimarket.wind.com.cn/#/user/overview 开发者中心获取）。
 
 ---
 
