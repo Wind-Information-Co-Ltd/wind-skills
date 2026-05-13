@@ -38,16 +38,18 @@ examples:
 
 8 个 server_type 各自能干什么：
 
-| server_type           | 能力                                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `stock_data`        | **A 股**股票行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险）                          |
-| `global_stock_data` | **港股 / 美股**股票行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险）                   |
-| `fund_data`         | 基金 ETF / LOF 行情 + 全维数据（档案 / 财务 / 持仓 / 业绩 / 持有人 / 管理公司）                         |
-| `index_data`        | 指数 / 板块行情 + 档案 / 基本面（成份股加权 PE/PB/PS）/ 技术指标                                        |
-| `bond_data`         | 债券基本档案 / 发债主体公司信息 / 行情与估值（久期 / 凸性 / 利差）/ 发债主体财务                        |
-| `financial_docs`    | 上市公司公告 + 财经新闻 RAG                                                                             |
-| `economic_data`     | EDB 宏观 / 行业经济指标（含 `freq` / `magnitude` / `currency` / `searchType` 等精细化字段控制） |
-| `analytics_data`    | 自然语言通用入口，覆盖整个 Wind 数据库（跨域综合 / 衍生品 / 商品等）                                    |
+| server_type | 能力 | 工具清单 |
+|---|---|---|
+| `stock_data` | **A 股**股票行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险） | `get_stock_price_indicators` / `get_stock_kline` / `get_stock_quote` / `get_stock_basicinfo` / `get_stock_fundamentals` / `get_stock_equity_holders` / `get_stock_events` / `get_stock_technicals` / `get_risk_metrics` |
+| `global_stock_data` | **港股 / 美股**股票行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险） | `get_global_stock_price_indicators` / `get_global_stock_kline` / `get_global_stock_quote` / `get_global_stock_basicinfo` / `get_global_stock_fundamentals` / `get_global_stock_equity_holders` / `get_global_stock_events` / `get_global_stock_technicals` / `get_global_stock_risk_metrics` |
+| `fund_data` | 基金 ETF / LOF 行情 + 全维数据（档案 / 财务 / 持仓 / 业绩 / 持有人 / 管理公司） | `get_fund_price_indicators` / `get_fund_kline` / `get_fund_quote` / `get_fund_info` / `get_fund_financials` / `get_fund_holdings` / `get_fund_performance` / `get_fund_holders` / `get_fund_company_info` |
+| `index_data` | 指数 / 板块行情 + 档案 / 基本面（成份股加权 PE/PB/PS）/ 技术指标 | `get_index_price_indicators` / `get_index_kline` / `get_index_quote` / `get_index_basicinfo` / `get_index_fundamentals` / `get_index_technicals` |
+| `bond_data` | 债券基本档案 / 发债主体公司信息 / 行情与估值（久期 / 凸性 / 利差）/ 发债主体财务 | `get_bond_basicinfo` / `get_bond_issuer_info` / `get_bond_market_data` / `get_bond_financial_data` |
+| `financial_docs` | 上市公司公告 + 财经新闻 RAG | `get_company_announcements` / `get_financial_news` |
+| `economic_data` | EDB 宏观 / 行业经济指标（含 `freq` / `magnitude` / `currency` / `searchType` 等精细化字段控制） | `get_economic_data` |
+| `analytics_data` | 自然语言通用入口，覆盖整个 Wind 数据库（跨域综合 / 衍生品 / 商品等） | `get_financial_data` |
+
+> ⚠️ **调用工具前，必须将工具名与上表「工具清单」列逐字核对；如果工具名不在清单中，说明推断有误，必须从清单中重新查找正确的工具名后再调用，严禁调用清单中不存在的工具。**
 
 **❌ 不触发**：欧股 / 日股 / 其它非中概非美股；汇率 / 期货盘口 / 加密货币；非金融数据。
 
@@ -67,15 +69,20 @@ examples:
 node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 ```
 
-> **Windows 注意**：上面的单引号写法只在 Bash / Git Bash / WSL 下生效。原生 PowerShell / cmd 走以下写法之一：
+> **⚠️ Shell 转义是 `INVALID_PARAMS_JSON` 错误的首要原因。** JSON 第三参数中的双引号和花括号会被不同 shell 差异化处理，必须按当前 shell 类型选择正确写法，否则 JSON 被截断或变形：
 >
-> ```powershell
-> # PowerShell：内部双引号用反斜杠转义
-> node scripts/cli.mjs call stock_data get_stock_quote '{\"windcode\":\"600519.SH\"}'
+> | Shell | 写法 | 示例 |
+> |---|---|---|
+> | **Bash / Git Bash / WSL** | 外层单引号包裹，内部双引号无需转义 | `node scripts/cli.mjs call stock_data get_stock_quote '{"windcode":"600519.SH"}'` |
+> | **PowerShell 5.x / Windows PowerShell** | 外层单引号包裹，内部每个双引号前加反斜杠 `\"` 转义；如果 JSON 字符串值里有空格，把空格写成 `\u0020` | `node scripts/cli.mjs call stock_data get_stock_quote '{\"windcode\":\"600519.SH\"}'` |
+> | **PowerShell stop-parsing** | `--%` 后不要再套单引号；JSON 内部双引号仍写成 `\"`；如果 JSON 字符串值里有空格，把空格写成 `\u0020` | `node scripts/cli.mjs call stock_data get_stock_quote --% {\"windcode\":\"600519.SH\"}` |
+> | **cmd.exe** | 外层双引号包裹整个 JSON，内部双引号用反斜杠转义 | `node scripts/cli.mjs call stock_data get_stock_quote "{\"windcode\":\"600519.SH\"}"` |
 >
-> # PowerShell 7+：用 --% 停止解析
-> node scripts/cli.mjs call stock_data get_stock_quote --% '{"windcode":"600519.SH"}'
-> ```
+> **不要混用 shell 写法。** PowerShell 中裸写 `'{"windcode":"600519.SH"}'` 或 `--% '{"windcode":"600519.SH"}'` 会导致双引号丢失；PowerShell 5.x 中 `'{\"question\":\"海光信息 688041 公司基本资料\"}'` 会在空格处被拆成多个参数；PowerShell 5.x 中把 `ConvertTo-Json` 结果作为变量裸传给 Node 也会导致双引号丢失。若不确定当前 shell，先用 `node -e "console.log(process.argv.slice(1))" <params_json>` 回显确认 Node 实际收到的参数。
+>
+> **PowerShell 查询语句含空格时的正确示例**：`node scripts/cli.mjs call stock_data get_stock_basicinfo '{\"question\":\"海光信息\u0020688041\u0020公司基本资料\u0020所属行业\",\"lang\":\"中文\"}'`。`JSON.parse` 会把 `\u0020` 还原为空格，后端收到的问题仍是 `海光信息 688041 公司基本资料 所属行业`。
+>
+> **PowerShell 读取本文档时请显式使用 UTF-8。** 本文件为 UTF-8 编码；Windows PowerShell 5.x 的 `Get-Content` 可能按系统 ANSI/GBK 读取无 BOM 的 UTF-8 文件，显示为 `璁块棶...` 等乱码。请使用 `Get-Content -Encoding utf8 -LiteralPath 'skills/wind-mcp-skill/SKILL.md'`，或使用 PowerShell 7 / `rg` 读取。
 
 ### Codex 沙箱联网要求
 
@@ -95,18 +102,47 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 
 | 类型             | 入参                                                                                      | 适用工具                                                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **行情类** | `{windcode, ...}` 结构化字段                                                            | `*_price_indicators` / `*_kline` / `*_quote`（仅 stock / global_stock / fund / index）                                             |
+| **行情类** | `{windcode, ...}` 结构化字段                                                            | `get_stock_price_indicators` / `get_stock_kline` / `get_stock_quote` / `get_global_stock_price_indicators` / `get_global_stock_kline` / `get_global_stock_quote` / `get_fund_price_indicators` / `get_fund_kline` / `get_fund_quote` / `get_index_price_indicators` / `get_index_kline` / `get_index_quote` |
 | **NL 类**  | `{question, lang?}` 自然语言（`lang` enum 在不同 server_type 下取值不同，见各段说明） | 其余工具（含 `bond_data` 全部 / `financial_docs` / `economic_data` / `analytics_data`，部分入参字段名 / 取值有差异，详见工具表） |
 
 ---
+
+## 意图判定与路由顺序（强制）
+
+每次接到用户问题时，必须先完成意图判定，再决定 `server_type + tool_name`。按以下固定顺序执行，禁止跳步、禁止并行抢路由：
+
+1. **文档类优先（`financial_docs`）**
+   - 命中新闻/媒体/快讯/报道/评论/消息等语义：`financial_docs.get_financial_news`
+   - 命中公告/年报/半年报/季报/招股书/监管披露等语义：`financial_docs.get_company_announcements`
+
+2. **宏观指标（`economic_data`）**
+   - 命中 GDP / CPI / PPI / PMI / 社融 / 利率 / 失业率 / 进出口等经济指标语义：
+     `economic_data.get_economic_data`
+
+3. **行情时序（`stock_data` / `global_stock_data` / `fund_data` / `index_data`）**
+   - 命中最新价 / 涨跌幅 / 成交量 / K 线 / 分钟线 / 日内走势等行情语义时：
+     先判标的类型与市场，再选对应 server 的行情类工具（`*_price_indicators` / `*_kline` / `*_quote`）。
+
+4. **深度业务 NL（对应专项 server）**
+   - 命中财务 / 股本 / 股东 / 事件 / 技术指标 / 风险 / 持仓 / 业绩 / 主体财务等深度业务语义时：
+     走对应 server 的 NL 工具（如 `*_fundamentals` / `*_events` / `*_technicals` / `*_risk_metrics` 等）。
+
+5. **通用兜底（`analytics_data`）**
+   - 仅当前 1~4 步都无法命中时，才可使用：
+     `analytics_data.get_financial_data`
+
+**硬约束：**
+- `analytics_data` 不得抢占已明确意图（只允许兜底）。
+- 同一问句只允许一次主路由；本节不定义追问流程。
+- 路由判定必须先于参数构造与调用执行。
 
 ## 3. 工具表
 
 ### 行情类（`stock_data` / `global_stock_data` / `fund_data` / `index_data` 共用 3 个工具签名）
 
-> 4 个 server_type 共用同一组 `get_*_price_indicators` / `get_*_kline` / `get_*_quote` 工具签名。`windcode` 字段直接传用户原话里的标的名（中文名 / 简称 / 代码均可），后端自动解析（`贵州茅台` → `600519.SH`、`小米集团` → `01810.HK`、`苹果公司` → `AAPL.O`、`易方达蓝筹精选` → `005827.OF`、`沪深300` → `000300.SH`），AI 无需自己查代码。**用户给短名 / 别名（如 `茅台` 可匹配贵州茅台 / 茅台股份 / 茅台啤酒等多只）时主动预防性反问「你问的是哪只？」——后端不会报歧义，会直接选一个，可能选错**。代码格式参考：A 股 `600519.SH` / `8XXXXX.BJ`、港股 `00700.HK`、美股 `AAPL.O` / `MSFT.O`、场外基金 `005827.OF`、ETF/LOF `588200.SH` / `159915.SZ`、指数 `000300.SH` / `000905.SH` / `HSI.HI`。
+> 4 个 server_type 共用同一组 `get_stock_price_indicators` / `get_stock_kline` / `get_stock_quote` / `get_global_stock_price_indicators` / `get_global_stock_kline` / `get_global_stock_quote` / `get_fund_price_indicators` / `get_fund_kline` / `get_fund_quote` / `get_index_price_indicators` / `get_index_kline` / `get_index_quote` 工具签名。`windcode` 字段直接传用户原话里的标的名（中文名 / 简称 / 代码均可），后端自动解析（`贵州茅台` → `600519.SH`、`小米集团` → `01810.HK`、`苹果公司` → `AAPL.O`、`易方达蓝筹精选` → `005827.OF`、`沪深300` → `000300.SH`），AI 无需自己查代码。**用户给短名 / 别名（如 `茅台` 可匹配贵州茅台 / 茅台股份 / 茅台啤酒等多只）时主动预防性反问「你问的是哪只？」——后端不会报歧义，会直接选一个，可能选错**。代码格式参考：A 股 `600519.SH` / `8XXXXX.BJ`、港股 `00700.HK`、美股 `AAPL.O` / `MSFT.O`、场外基金 `005827.OF`、ETF/LOF `588200.SH` / `159915.SZ`、指数 `000300.SH` / `000905.SH` / `HSI.HI`。
 
-#### `get_{stock|global_stock|fund|index}_price_indicators` — 行情快照
+#### 行情快照工具（4 个 server_type 各 1 个，共 4 个：`get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`）
 
 获取对应标的一个或多个具体价格指标的最新快照值。需要提供标的代码/名称和指标名称，返回当前值而非时间序列。当用户询问某只股票、基金或指数的当前/最新价格或任何单一时点指标值时，使用此工具。
 
@@ -115,7 +151,7 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 | `windcode` | ✅   | 标的（见行情类段头）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `indexes`  | ✅   | **中文字段名**逗号分隔。**常用快捷**（覆盖 80% 高频问题）：`<br>`· 通用：`中文简称,最新成交价,前收盘价,今日开盘价,今日最高价,今日最低价,成交量,成交额,涨跌,涨跌幅<br>`· 股票额外：`换手率,量比,委比,涨停价,跌停价,52周最高,52周最低,总市值1,流通市值,市盈率(TTM),市净率,股息率<br>`· 基金额外：`IOPV,贴水率,基金最新份额,基金规模,最新净值,累计净值,七日年化收益率<br>`· 指数额外：`成分股贡献点数,上涨家数,下跌家数,平盘家数<br>`其它字段（估值细分 / 财务 / 资金流 / 期权希腊字母等）见 `references/indicators.md` |
 
-#### `get_{stock|global_stock|fund|index}_kline` — K 线
+#### K 线工具（4 个 server_type 各 1 个，共 4 个：`get_stock_kline` / `get_global_stock_kline` / `get_fund_kline` / `get_index_kline`）
 
 获取对应标的在指定日期范围内的 K 线行情时间序列，默认日 K（`period=10`）。每条记录代表一个交易周期，通常包含开盘价、收盘价、最高价、最低价、成交量、换手率、涨跌幅、均价。当用户需要多日价格历史时，使用此工具。
 
@@ -130,7 +166,7 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 | `issusp`     |      | `"1"`  | `0`=不含停牌 / `1`=含                                                                                                                                                             |
 | `afdate`     |      |          | 复权基准日期 `yyyyMMdd`，通常不需指定                                                                                                                                               |
 
-#### `get_{stock|global_stock|fund|index}_quote` — 分钟级
+#### 分钟级行情工具（4 个 server_type 各 1 个，共 4 个：`get_stock_quote` / `get_global_stock_quote` / `get_fund_quote` / `get_index_quote`）
 
 获取对应标的在指定日期范围内的分钟级行情时间序列（默认为当日）。每条记录代表一分钟，包含价格、均价、成交量、换手率。当用户需要日内价格走势、逐分钟交易数据或任何日内时间序列数据时，使用此工具。
 
@@ -311,7 +347,7 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 | 全流程禁止 Web Search 兜底                                                                       | 立即取消当前违规分支，回到 Wind 合规路径继续处理（修参数、换工具、换 server_type、拆分查询、升级 skill）；不结束整体任务 |
 | 命令必须在**本文件所在目录**下执行                                                         | cli.mjs 用相对路径，否则找不到资源                                                                                       |
 | K 线 `begin_date` / `end_date` **都必填**                                              | schema 已强制，缺一报错                                                                                                  |
-| `*_quote` 字段名是 `begin / end`，**不是** `begin_date / end_date`                   | 字段名错参数解析报错                                                                                                     |
+| `get_stock_quote` / `get_global_stock_quote` / `get_fund_quote` / `get_index_quote` 字段名是 `begin / end`，**不是** `begin_date / end_date` | 字段名错参数解析报错                                                                                                     |
 | K 线 `begin_date / end_date` 和 EDB `beginDate / endDate`（注意 camelCase）都用 `yyyyMMdd` | 格式不对报错                                                                                                             |
 | 行情类 `indexes` 字段**只接中文名**，从 `references/indicators.md` 复制粘贴            | 自创字段名 / 写英文报错                                                                                                  |
 | `aftype` 只接受 `"0"` / `"1"`（无"不复权"）                                                | 其他值报错                                                                                                               |
@@ -328,8 +364,8 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 
 | 场景                                    | 怎么做                                                                                                     |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 拿单时点最新值 / 已知具体字段名         | 用行情类工具（`*_price_indicators`），结构化入参，`indexes` 中文名                                     |
-| 拿过去 N 日时间序列                     | K 线 / 分钟级用行情类（`*_kline` / `*_quote`）；技术指标 / 财务时间序列用 NL 类（`*_technicals` 等） |
+| 拿单时点最新值 / 已知具体字段名         | 用 `get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`，结构化入参，`indexes` 中文名 |
+| 拿过去 N 日时间序列                     | K 线 / 分钟级用 `get_stock_kline` / `get_global_stock_kline` / `get_fund_kline` / `get_index_kline` / `get_stock_quote` / `get_global_stock_quote` / `get_fund_quote` / `get_index_quote`；技术指标 / 财务时间序列用 `get_stock_technicals` / `get_global_stock_technicals` / `get_index_technicals` |
 | 财务 / 档案 / 持仓 / 事件等深度业务问题 | NL 类工具，自然语言入参                                                                                    |
 | `indexes` 字段不在常用快捷里          | Read `references/indicators.md`（按类别分组的中文字段表，命名陷阱：括号 / 全角 / 数字位需逐字复制）      |
 | 多标的对比（`贵州茅台 vs 五粮液`）    | 单工具单标的限制 → 并行多次调用                                                                           |
