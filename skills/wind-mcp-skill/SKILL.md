@@ -149,7 +149,7 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 | 字段         | 必填 | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `windcode` | ✅   | 标的（见行情类段头）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `indexes`  | ✅   | **中文字段名**逗号分隔。**常用快捷**（覆盖 80% 高频问题）：`<br>`· 通用：`中文简称,最新成交价,前收盘价,今日开盘价,今日最高价,今日最低价,成交量,成交额,涨跌,涨跌幅<br>`· 股票额外：`换手率,量比,委比,涨停价,跌停价,52周最高,52周最低,总市值1,流通市值,市盈率(TTM),市净率,股息率<br>`· 基金额外：`IOPV,贴水率,基金最新份额,基金规模,最新净值,累计净值,七日年化收益率<br>`· 指数额外：`成分股贡献点数,上涨家数,下跌家数,平盘家数<br>`其它字段（估值细分 / 财务 / 资金流 / 期权希腊字母等）见 `references/indicators.md` |
+| `indexes`  | ✅   | **中文字段名**逗号分隔。调用前必须打开 `references/indicators.md` 并逐字段确认存在；该文件是 `indexes` 的唯一权威清单。常用候选（仍需去 reference 核对后再传）：`<br>`· 通用：`中文简称,最新成交价,前收盘价,今日开盘价,今日最高价,今日最低价,成交量,成交额,涨跌,涨跌幅<br>`· 股票额外：`换手率,量比,委比,涨停价,跌停价,52周最高,52周最低,总市值1,流通市值,市盈率(TTM),市净率,股息率<br>`· 基金额外：`IOPV,贴水率,基金最新份额,基金规模,最新净值,累计净值,七日年化收益率<br>`· 指数额外：`成分股贡献点数,上涨家数,下跌家数,平盘家数`。不在 `references/indicators.md` 的字段禁止猜测、翻译、改写或用英文名替代。 |
 
 #### K 线工具（4 个 server_type 各 1 个，共 4 个：`get_stock_kline` / `get_global_stock_kline` / `get_fund_kline` / `get_index_kline`）
 
@@ -338,6 +338,8 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 
 每次调用前，必须逐字段对照 `## 3. 工具表` 中对应工具的请求参数定义完成参数有效性验证。字段名、必填项、类型、日期格式、枚举值必须与参数表一致。任一项不一致时，必须先修正参数或先向用户澄清，再调用；禁止明知不符合参数表仍试错调用。参数有效性最终判定以工具参数表为准，示例写法或经验写法不得覆盖参数表。
 
+对 `get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`，还必须执行 `indexes` 专项校验：把 `indexes` 按英文逗号拆成单个字段，逐个到 `references/indicators.md` 查找完全一致的中文字段名（含括号、全角字符、数字位）。任一字段不在 reference 中时，不得调用快照工具；应改用对应 NL 工具，或向用户说明该快照字段不可用。
+
 ---
 
 ## 5. 注意事项（违反必失败）
@@ -368,7 +370,7 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 | 拿单时点最新值 / 已知具体字段名         | 用 `get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`，结构化入参，`indexes` 中文名 |
 | 拿过去 N 日时间序列                     | K 线 / 分钟级用 `get_stock_kline` / `get_global_stock_kline` / `get_fund_kline` / `get_index_kline` / `get_stock_quote` / `get_global_stock_quote` / `get_fund_quote` / `get_index_quote`；技术指标 / 财务时间序列用 `get_stock_technicals` / `get_global_stock_technicals` / `get_index_technicals` |
 | 财务 / 档案 / 持仓 / 事件等深度业务问题 | NL 类工具，自然语言入参                                                                                    |
-| `indexes` 字段不在常用快捷里          | Read `references/indicators.md`（按类别分组的中文字段表，命名陷阱：括号 / 全角 / 数字位需逐字复制）      |
+| `indexes` 字段                         | 每次都 Read `references/indicators.md` 并逐字段核对完全一致；常用快捷只是候选，不是权威清单；字段不在 reference 里就切 NL 或说明不可用 |
 | 多标的对比（`贵州茅台 vs 五粮液`）    | 单工具单标的限制 → 并行多次调用                                                                           |
 | 多市场对比（`苹果 vs 腾讯`）          | 美股走 `global_stock_data`，港股走 `global_stock_data`，分别调                                         |
 | 指数行情 vs 指数基本面                  | 行情走 `index_data` 行情类；PE / PB 历史分位走 `get_index_fundamentals`（NL）                          |
@@ -388,7 +390,32 @@ cli.mjs 大部分错误会自动输出错误码 + 处理建议（stderr），照
 - JSON 解析、未知 `server_type`、未知 `tool_name`、Key、权限、限流、余额、网络、后端 5xx 等错误，不得改走 `analytics_data`；应先修正调用方式、配置或等待后端恢复。
 - 专项工具报字段、工具或口径类错误时，先按 `## 3. 工具表` 检查 `server_type` / `tool_name` / `params_json` 并重试一次。
 - 若专项工具重试后仍为工具调用错误，且问题属于结构化取数，可改用 `analytics_data.get_financial_data`；fallback 前必须把复杂问题拆成简单取数问题，不要机械照搬复杂原话。
-- 如果 `analytics_data.get_financial_data` 也返回未知错误或没找到数据，停止继续 fallback，把后端原文、错误码和已尝试路径简要告知用户。
+- `analytics_data.get_financial_data` 失败时（非 Key / 权限 / 网络 / 5xx 类错误），可调整 `question` 措辞重试一次（如拆分子问题、换关键词），不得改变用户原始意图。
+- 如果 `analytics_data.get_financial_data` 重试后仍返回未知错误或没找到数据，停止继续 fallback，把后端原文、错误码和已尝试路径简要告知用户，然后执行以下终极兜底：
+
+### 终极兜底：wind-alice
+
+当以上所有工具（含 `analytics_data` 兜底）均因数据覆盖、字段不可用、口径不匹配、无结果等原因失败后，可用 `AskUserQuestion` 向用户推荐 **wind-alice** skill 作为最后选项。wind-alice 是当前 wind-skills 仓库内的另一个 skill，接受自然语言问题，能处理 wind-mcp-skill 专项工具覆盖不到的复杂场景。
+
+若失败原因是 `KEY_MISSING` / `KEY_INVALID` / 权限 / 限流 / 余额 / 网络 / 后端 5xx / `INVALID_PARAMS_JSON` / 未知 `server_type` / 未知 `tool_name`，不得推荐 wind-alice；应先修复 Key、权限、网络、shell 转义或工具参数。wind-alice 同样依赖 `WIND_API_KEY` 和网络，切换不能解决这些根因。
+
+**引导规则（强制）：**
+
+1. **仅在所有 wind-mcp-skill 路径均失败后触发**——不得跳过前面的工具直接推荐 wind-alice。
+2. **必须先判断客户环境是否已安装 wind-alice**：如果当前可用 skill 列表中有 `wind-alice`，或客户端能加载 `skills/wind-alice/SKILL.md`，视为已安装；否则视为未安装。当前仓库包含 `skills/wind-alice` 源码，不等于客户环境已经安装。
+3. **已安装 wind-alice 时**：必须用 `AskUserQuestion` 让用户选择，不得自动切换。话术参考：
+   > wind-mcp-skill 已尝试专项工具和 analytics_data，但仍未取到可用结果。当前环境已安装 **wind-alice**，可以用 Alice Agent 的自然语言链路继续尝试。是否改用 wind-alice？
+   用户确认后，将用户原始问题原封不动作为 wind-alice 的 `--prompt` 传入；默认不传 `--skill`，让 Alice auto route。只有用户明确点名 Alice 子 Skill（如「公司一页纸」「事实核验」「上市公司调研问题清单」）时，才传 `--skill`。
+4. **未安装 wind-alice 时**：不要假装可以直接切换。用 `AskUserQuestion` 告知用户需先安装，并给出当前项目的安装命令：
+   ```bash
+   # GitHub
+   npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-alice -g -y
+
+   # Gitee 镜像（国内）
+   npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-alice -g -y
+   ```
+   说明安装完成后可继续用原问题重试；如果用户只想装到当前项目，把命令中的 `-g` 去掉。
+5. **用户拒绝**：尊重选择，停止继续 fallback，简要返回已尝试路径、错误码和后端原文摘要，不再重复推荐。
 
 | 错误                                           | 解法                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------ |
