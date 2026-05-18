@@ -13,19 +13,19 @@ security:
   network: true
 examples:
   - "贵州茅台今天最新价"
-  - "腾讯控股 00700.HK 最新价和成交量"
-  - "苹果公司 AAPL.O 最近 30 日 K 线"
-  - "宁德时代近 30 日 K 线"
+  - "腾讯控股(00700.HK)最新价和成交量"
+  - "苹果公司(AAPL.O)最近30日K线"
+  - "宁德时代近30日K线"
   - "贵州茅台今日分钟级走势"
-  - "科创50ETF 588200.SH 最新折溢价率"
-  - "易方达蓝筹精选 005827.OF 的最新规模和经理"
-  - "沪深300 指数最近 1 个月走势"
-  - "中证500 指数 PE / PB 历史分位"
-  - "国债 2601 基本信息和最新行情"
-  - "宁德时代 2024 年 ROE 和净利润增速"
-  - "贵州茅台 2024 年年度报告内容"
-  - "美联储 2026 年利率政策最新新闻"
-  - "中国近 10 年新能源汽车产销量"
+  - "科创50ETF(588200.SH)最新折溢价率"
+  - "易方达蓝筹精选(005827.OF)最新规模和经理"
+  - "沪深300指数最近1个月走势"
+  - "中证500指数PE/PB历史分位"
+  - "国债2601基本信息和最新行情"
+  - "宁德时代2024年ROE和净利润增速"
+  - "贵州茅台2024年年度报告内容"
+  - "美联储2026年利率政策最新新闻"
+  - "中国近10年新能源汽车产销量"
   - "贵州茅台前十大股东"
 ---
 # Wind 万得金融数据
@@ -69,18 +69,39 @@ examples:
 node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 ```
 
+### CLI JSON 输出契约
+
+`cli.mjs` 的主输出固定为 **stdout JSON envelope**，不要再从 stderr 解析错误、帮助或更新提示。
+
+1. `ok`：判断主命令成功或失败。
+2. `ok:true` 时读取 `data.result`；业务 JSON 通常在 `data.result.content[0].text` 中。
+3. `ok:false` 时必须读取 `error.code`、`error.retryable`、`error.fallback_allowed`、`error.agent_action`。
+4. `notices` 只是附加提醒，不改变主命令成功/失败判断。
+
+失败处理优先级：
+
+1. `error.code`：稳定错误分支。
+2. `error.retryable` / `error.fallback_allowed`：决定是否原样重试、是否允许 fallback。
+3. `error.agent_action`：默认优先遵循的下一步动作。
+4. `error.hint`：错误原因和补充解释，不得单独覆盖 `agent_action`。
+5. `error.context`：候选工具、server、tool 等上下文。
+
+`call` 成功时 CLI 只返回一份原始 MCP `data.result`，不再同时返回 `data.parsed`；若 `data.result.content[0].text` 是 JSON 字符串，Agent 自行解析，否则按原始文本处理。
+
+错误码字典见 `references/error-codes.json`。
+
 > **⚠️ Shell 转义是 `INVALID_PARAMS_JSON` 错误的首要原因。** JSON 第三参数中的双引号和花括号会被不同 shell 差异化处理，必须按当前 shell 类型选择正确写法，否则 JSON 被截断或变形：
 >
 > | Shell | 写法 | 示例 |
 > |---|---|---|
 > | **Bash / Git Bash / WSL** | 外层单引号包裹，内部双引号无需转义 | `node scripts/cli.mjs call stock_data get_stock_quote '{"windcode":"600519.SH"}'` |
-> | **PowerShell 5.x / Windows PowerShell** | 外层单引号包裹，内部每个双引号前加反斜杠 `\"` 转义；如果 JSON 字符串值里有空格，把空格写成 `\u0020` | `node scripts/cli.mjs call stock_data get_stock_quote '{\"windcode\":\"600519.SH\"}'` |
-> | **PowerShell stop-parsing** | `--%` 后不要再套单引号；JSON 内部双引号仍写成 `\"`；如果 JSON 字符串值里有空格，把空格写成 `\u0020` | `node scripts/cli.mjs call stock_data get_stock_quote --% {\"windcode\":\"600519.SH\"}` |
+> | **PowerShell 5.x / Windows PowerShell** | 外层单引号包裹，内部每个双引号前加反斜杠 `\"` 转义 | `node scripts/cli.mjs call stock_data get_stock_quote '{\"windcode\":\"600519.SH\"}'` |
+> | **PowerShell stop-parsing** | `--%` 后不要再套单引号；JSON 内部双引号仍写成 `\"` | `node scripts/cli.mjs call stock_data get_stock_quote --% {\"windcode\":\"600519.SH\"}` |
 > | **cmd.exe** | 外层双引号包裹整个 JSON，内部双引号用反斜杠转义 | `node scripts/cli.mjs call stock_data get_stock_quote "{\"windcode\":\"600519.SH\"}"` |
 >
-> **不要混用 shell 写法。** PowerShell 中裸写 `'{"windcode":"600519.SH"}'` 或 `--% '{"windcode":"600519.SH"}'` 会导致双引号丢失；PowerShell 5.x 中 `'{\"question\":\"海光信息 688041 公司基本资料\"}'` 会在空格处被拆成多个参数；PowerShell 5.x 中把 `ConvertTo-Json` 结果作为变量裸传给 Node 也会导致双引号丢失。若不确定当前 shell，先用 `node -e "console.log(process.argv.slice(1))" <params_json>` 回显确认 Node 实际收到的参数。
+> **不要混用 shell 写法。** PowerShell 中裸写 `'{"windcode":"600519.SH"}'` 或 `--% '{"windcode":"600519.SH"}'` 会导致双引号丢失；PowerShell 5.x 中把 `ConvertTo-Json` 结果作为变量裸传给 Node 也会导致双引号丢失。若不确定当前 shell，先用 `node -e "console.log(process.argv.slice(1))" <params_json>` 回显确认 Node 实际收到的参数。
 >
-> **PowerShell 查询语句含空格时的正确示例**：`node scripts/cli.mjs call stock_data get_stock_basicinfo '{\"question\":\"海光信息\u0020688041\u0020公司基本资料\u0020所属行业\",\"lang\":\"中文\"}'`。`JSON.parse` 会把 `\u0020` 还原为空格，后端收到的问题仍是 `海光信息 688041 公司基本资料 所属行业`。
+> **PowerShell NL 参数示例**：`node scripts/cli.mjs call stock_data get_stock_basicinfo '{\"question\":\"海光信息688041公司基本资料、所属行业\",\"lang\":\"中文\"}'`。question/query 中禁止空格，用标点或直接连接。
 >
 > **PowerShell 读取本文档时请显式使用 UTF-8。** 本文件为 UTF-8 编码；Windows PowerShell 5.x 的 `Get-Content` 可能按系统 ANSI/GBK 读取无 BOM 的 UTF-8 文件，显示为乱码。请使用 `Get-Content -Encoding utf8 -LiteralPath 'skills/wind-mcp-skill/SKILL.md'`，或使用 PowerShell 7 / `rg` 读取。
 
@@ -96,7 +117,7 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 
 ### API Key
 
-报 `KEY_MISSING` 时按 cli.mjs stderr 给的 extraHint 配置即可（程序自动按多种方式查找 Key）；需要拿 Key 跑 `node scripts/cli.mjs open-portal` 自动打开开发者中心。
+报 `KEY_MISSING` 时读取 stdout JSON 中的 `error.agent_action` / `error.hint` 配置即可（程序自动按多种方式查找 Key）；需要拿 Key 跑 `node scripts/cli.mjs open-portal` 自动打开开发者中心。
 
 ### 入参签名两类
 
@@ -208,12 +229,12 @@ node scripts/cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","b
 
 | 工具                         | 说明                                                            | question 示例                           |
 | ---------------------------- | --------------------------------------------------------------- | --------------------------------------- |
-| `get_stock_basicinfo`      | 公司档案（信息 / 主营 / 行业 / IPO 上市板）                     | `"600519.SH 公司基本档案"`            |
-| `get_stock_fundamentals`   | 财务（盈利 / 资产负债 / 利润 / 现金流 / 增长率 / 银行业专项）   | `"贵州茅台 2024 年 ROE 和净利润增速"` |
+| `get_stock_basicinfo`      | 公司档案（信息 / 主营 / 行业 / IPO 上市板）                     | `"600519.SH公司基本档案"`            |
+| `get_stock_fundamentals`   | 财务（盈利 / 资产负债 / 利润 / 现金流 / 增长率 / 银行业专项）   | `"贵州茅台2024年ROE和净利润增速"` |
 | `get_stock_equity_holders` | 股本 + 股东（总股本 / 流通 / 前十大 / 实控人 / 限售）           | `"贵州茅台前十大股东"`                |
-| `get_stock_events`         | 事件 + 资本运作（IPO / 增发 / 配股 / 并购 / ST / 分红）         | `"宁德时代 2024 年增发和并购事件"`    |
-| `get_stock_technicals`     | 技术指标时间序列（MACD / KDJ / RSI / BOLL / 融资融券 / 龙虎榜） | `"贵州茅台近 60 日 MACD 走势"`        |
-| `get_risk_metrics`         | 风险指标（Beta / Jensen Alpha / 波动率 / Sharpe / VaR）         | `"贵州茅台过去 1 年 Beta 和波动率"`   |
+| `get_stock_events`         | 事件 + 资本运作（IPO / 增发 / 配股 / 并购 / ST / 分红）         | `"宁德时代2024年增发和并购事件"`    |
+| `get_stock_technicals`     | 技术指标时间序列（MACD / KDJ / RSI / BOLL / 融资融券 / 龙虎榜） | `"贵州茅台近60日MACD走势"`        |
+| `get_risk_metrics`         | 风险指标（Beta / Jensen Alpha / 波动率 / Sharpe / VaR）         | `"贵州茅台过去1年Beta和波动率"`   |
 
 #### `global_stock_data` NL（6 个，**港股 / 美股**）
 
@@ -225,12 +246,12 @@ node scripts/cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","b
 
 | 工具                                | 说明                                                                           | question 示例                          |
 | ----------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------- |
-| `get_global_stock_basicinfo`      | 公司档案（中英文名称 / 注册地 / 经营范围 / 上市交易所 / 行业 / 指数成份）      | `"AAPL.O 公司基本档案"`              |
-| `get_global_stock_fundamentals`   | 财务（毛利率 / ROE / 资产 / 利润 / 现金流 / 增长率 / PE / PB / PS / 历史分位） | `"腾讯 00700.HK 2024 年 ROE 和营收"` |
-| `get_global_stock_equity_holders` | 股本 + 股东（总股本 / 流通 / 主要股东 / 机构持仓 / 限售解禁）                  | `"腾讯 00700.HK 前十大股东"`         |
-| `get_global_stock_events`         | 事件 + 资本运作（IPO / 增发 / 配股 / 并购 / 合规监管 / 分红）                  | `"腾讯 00700.HK 分红历史"`           |
-| `get_global_stock_technicals`     | 技术指标 + 多周期涨跌幅（相对大盘 / MACD / KDJ / RSI / BOLL / 融资融券）       | `"AAPL.O MACD 和 RSI"`               |
-| `get_global_stock_risk_metrics`   | 风险指标（Beta / Alpha / 波动率 / Sharpe / 最大回撤 / VaR / 财务安全比率）     | `"AAPL.O 过去 1 年 Beta 和波动率"`   |
+| `get_global_stock_basicinfo`      | 公司档案（中英文名称 / 注册地 / 经营范围 / 上市交易所 / 行业 / 指数成份）      | `"AAPL.O公司基本档案"`              |
+| `get_global_stock_fundamentals`   | 财务（毛利率 / ROE / 资产 / 利润 / 现金流 / 增长率 / PE / PB / PS / 历史分位） | `"腾讯(00700.HK)2024年ROE和营收"` |
+| `get_global_stock_equity_holders` | 股本 + 股东（总股本 / 流通 / 主要股东 / 机构持仓 / 限售解禁）                  | `"腾讯(00700.HK)前十大股东"`         |
+| `get_global_stock_events`         | 事件 + 资本运作（IPO / 增发 / 配股 / 并购 / 合规监管 / 分红）                  | `"腾讯(00700.HK)分红历史"`           |
+| `get_global_stock_technicals`     | 技术指标 + 多周期涨跌幅（相对大盘 / MACD / KDJ / RSI / BOLL / 融资融券）       | `"AAPL.O的MACD和RSI"`               |
+| `get_global_stock_risk_metrics`   | 风险指标（Beta / Alpha / 波动率 / Sharpe / 最大回撤 / VaR / 财务安全比率）     | `"AAPL.O过去1年Beta和波动率"`   |
 
 #### `fund_data` NL（6 个）
 
@@ -242,11 +263,11 @@ node scripts/cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","b
 
 | 工具                      | 说明                                                | question 示例                           |
 | ------------------------- | --------------------------------------------------- | --------------------------------------- |
-| `get_fund_info`         | 档案（代码 / 简称 / 风格 / 业绩基准 / 费率 / 经理） | `"易方达蓝筹精选 005827.OF 基金档案"` |
-| `get_fund_financials`   | 财务（利润 / 净值 / 收入 / 费用 / 分红）            | `"005827.OF 2024 年净利润和分红"`     |
-| `get_fund_holdings`     | 持仓 + 资产配置（重仓股 / 申万 / Wind / 中信行业）  | `"005827.OF 最新一期重仓股"`          |
-| `get_fund_performance`  | 业绩 + 排名 + ETF / 二级交易                        | `"005827.OF 近 1 年业绩排名"`         |
-| `get_fund_holders`      | 持有人结构（个人 / 机构 / 申购赎回 / 规模变动）     | `"005827.OF 持有人结构"`              |
+| `get_fund_info`         | 档案（代码 / 简称 / 风格 / 业绩基准 / 费率 / 经理） | `"易方达蓝筹精选(005827.OF)基金档案"` |
+| `get_fund_financials`   | 财务（利润 / 净值 / 收入 / 费用 / 分红）            | `"005827.OF2024年净利润和分红"`     |
+| `get_fund_holdings`     | 持仓 + 资产配置（重仓股 / 申万 / Wind / 中信行业）  | `"005827.OF最新一期重仓股"`          |
+| `get_fund_performance`  | 业绩 + 排名 + ETF / 二级交易                        | `"005827.OF近1年业绩排名"`         |
+| `get_fund_holders`      | 持有人结构（个人 / 机构 / 申购赎回 / 规模变动）     | `"005827.OF持有人结构"`              |
 | `get_fund_company_info` | 基金管理公司档案 + 经理团队                         | `"易方达基金管理公司档案"`            |
 
 #### `index_data` NL（3 个）
@@ -259,9 +280,9 @@ node scripts/cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","b
 
 | 工具                       | 说明                                                                      | question 示例                  |
 | -------------------------- | ------------------------------------------------------------------------- | ------------------------------ |
-| `get_index_basicinfo`    | 指数档案（发布机构 / 基日 / 基点 / 计算方法 / 成份股数量 / 分类）         | `"沪深300 指数档案"`         |
-| `get_index_fundamentals` | 指数基本面（成份股加权 PE / PB / PS / 营收 / 净利润 / 现金流 / 历史分位） | `"沪深300 PE / PB 历史分位"` |
-| `get_index_technicals`   | 指数技术指标（多周期涨跌幅 / 趋向 / 反趋向 / 能量 / 量价 / 波动）         | `"中证500 MACD 和 RSI"`      |
+| `get_index_basicinfo`    | 指数档案（发布机构 / 基日 / 基点 / 计算方法 / 成份股数量 / 分类）         | `"沪深300指数档案"`         |
+| `get_index_fundamentals` | 指数基本面（成份股加权 PE / PB / PS / 营收 / 净利润 / 现金流 / 历史分位） | `"沪深300PE/PB历史分位"` |
+| `get_index_technicals`   | 指数技术指标（多周期涨跌幅 / 趋向 / 反趋向 / 能量 / 量价 / 波动）         | `"中证500的MACD和RSI"`      |
 
 #### `bond_data` NL（4 个）
 
@@ -273,10 +294,10 @@ node scripts/cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","b
 
 | 工具                        | 说明                                                                        | question 示例                    |
 | --------------------------- | --------------------------------------------------------------------------- | -------------------------------- |
-| `get_bond_basicinfo`      | 基本档案（交易所 / 分类 / 发行日期 / 规模 / 价格 / 票面利率 / 期限 / 兑付） | `"国债 2601 基本信息"`         |
-| `get_bond_issuer_info`    | 发债主体公司信息（名称 / 注册地 / 行业 / 股权结构 / 企业背景）              | `"国债 2601 发债主体"`         |
-| `get_bond_market_data`    | 行情数据 + 估值分析（报价 / 估价 / 溢价 / 久期 / 凸性 / 利差）              | `"国债 2601 久期和凸性"`       |
-| `get_bond_financial_data` | 发债主体财务（营收 / 利润 / 资产 / 负债 + 主体层面财务表现）                | `"国债 2601 主体 2024 年营收"` |
+| `get_bond_basicinfo`      | 基本档案（交易所 / 分类 / 发行日期 / 规模 / 价格 / 票面利率 / 期限 / 兑付） | `"国债2601基本信息"`         |
+| `get_bond_issuer_info`    | 发债主体公司信息（名称 / 注册地 / 行业 / 股权结构 / 企业背景）              | `"国债2601发债主体"`         |
+| `get_bond_market_data`    | 行情数据 + 估值分析（报价 / 估价 / 溢价 / 久期 / 凸性 / 利差）              | `"国债2601久期和凸性"`       |
+| `get_bond_financial_data` | 发债主体财务（营收 / 利润 / 资产 / 负债 + 主体层面财务表现）                | `"国债2601主体2024年营收"` |
 
 #### `financial_docs` — 公告 / 新闻（2 个）
 
@@ -287,7 +308,7 @@ node scripts/cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","b
 
 | 字段      | 必填 | 类型   | 说明                                                         |
 | --------- | ---- | ------ | ------------------------------------------------------------ |
-| `query` | ✅   | string | 自然语言，如 `"贵州茅台 2024 年报"` / `"美联储利率政策"` |
+| `query` | ✅   | string | 自然语言，如 `"贵州茅台2024年报"` / `"美联储利率政策"` |
 | `top_k` |      | int    | 返回文档数                                                   |
 
 ```bash
@@ -300,7 +321,7 @@ node scripts/cli.mjs call financial_docs get_financial_news '{"query":"美联储
 
 | 字段                        | 必填 | 说明                                                                                                                                            |
 | --------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `metricIdsStr`            | ✅   | **自然语言问句**（不是指标 ID），如 `"中国 GDP"` / `"美国 CPI 同比"`                                                                  |
+| `metricIdsStr`            | ✅   | **自然语言问句**（不是指标 ID），如 `"中国GDP"` / `"美国CPI同比"`                                                                  |
 | `beginDate` / `endDate` |      | `yyyyMMdd`                                                                                                                                    |
 | `freq`                    |      | `日`=`1` / `工作日`=`2` / `周`=`3` / `月`=`4` / `季`=`5` / `半年`=`6` / `年`=`7` / `年度`=`8`（中文或代码均可） |
 | `magnitude`               |      | `个`=`1` / `千` / `万` / `百万` / `千万` / `亿` / `十亿` / `百亿` / `千亿` / `万亿`                                       |
@@ -309,7 +330,7 @@ node scripts/cli.mjs call financial_docs get_financial_news '{"query":"美联储
 | `ifUnion`                 |      | `开启`=`1` / `不开启`=`2`（混合搜索）                                                                                                   |
 
 ```bash
-node scripts/cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国 CPI 同比","freq":"月","beginDate":"20240101","endDate":"20261231"}'
+node scripts/cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国CPI同比","freq":"月","beginDate":"20240101","endDate":"20261231"}'
 ```
 
 #### `analytics_data` — NL 通用入口（1 个）
@@ -323,7 +344,7 @@ node scripts/cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中�
 
 使用要求：
 
-- **首次调用必须将用户原始问句原封不动作为 `question` 透传**，禁止任何改写、概括、意译或添加用户未提及的条件。即使问句看起来不完整或不规范，也必须先透传一次。
+- **首次调用必须将用户原始问句去除所有空格后作为 `question` 透传**，用标点符号或直接连接替代空格，保持语义不变。禁止任何改写、概括、意译或添加用户未提及的条件。即使问句看起来不完整或不规范，也必须先透传一次（去除空格后）。
 - 仅当透传首次调用失败（后端报错 / 返回空 / 返回不匹配）时，才可改写或拆分 `question`，此时改写后的问句仍须忠实反映用户原始意图，不得擅自添加口径、频率、筛选条件等。
 - `question` 入参不要太复杂，应尽量是单一取数动作。复杂分析、归因、预测、多条件筛选后再分析等任务，先拆成多个简单取数问题，再由 AI 综合。
 - 需要先发现对象 / 展开范围 / 再对范围内对象二次取数的问题必须分步；如果无法得到明确范围或后端没有对应排名口径，停止并说明限制，不要强行猜。
@@ -338,7 +359,9 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 
 每次调用前，必须逐字段对照 `## 3. 工具表` 中对应工具的请求参数定义完成参数有效性验证。字段名、必填项、类型、日期格式、枚举值必须与参数表一致。任一项不一致时，必须先修正参数或先向用户澄清，再调用；禁止明知不符合参数表仍试错调用。参数有效性最终判定以工具参数表为准，示例写法或经验写法不得覆盖参数表。
 
-对 `get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`，还必须执行 `indexes` 专项校验：把 `indexes` 按英文逗号拆成单个字段，逐个到 `references/indicators.md` 查找完全一致的中文字段名（含括号、全角字符、数字位）。任一字段不在 reference 中时，不得调用快照工具；应改用对应 NL 工具，或向用户说明该快照字段不可用。
+对 `get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`，还必须执行 `indexes` 专项校验：调用前必须先打开 `references/indicators.md`，把 `indexes` 按英文逗号拆成单个字段，逐个到 reference 表格中查找完全一致的中文字段名（含括号、全角字符、数字位），确认后再调用。任一字段不在 reference 中时，不得调用快照工具，不得凭经验改写字段名；应改用对应 NL 工具，或向用户说明该快照字段不可用。
+
+对所有 `question` / `query` / `metricIdsStr` 自然语言参数，**禁止包含空格**。必须使用标点符号（顿号、逗号、括号等）分隔或直接连接。即使用户原句含空格，也必须在调用前去除所有空格。
 
 ---
 
@@ -354,7 +377,7 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 | 行情类 `indexes` 字段**只接中文名**，从 `references/indicators.md` 复制粘贴            | 自创字段名 / 写英文报错                                                                                                  |
 | `aftype` 只接受 `"0"` / `"1"`（无"不复权"）                                                | 其他值报错                                                                                                               |
 | A 股查 `stock_data`，港股 / 美股查 `global_stock_data`，**别混**                       | A 股财务工具会拒港股 / 美股                                                                                              |
-| `server_type + tool_name` 必须存在于 `references/tool-manifest.json`                         | CLI 会在真正调用后端前返回 `UNKNOWN_TOOL_NAME`；按 stderr 候选工具重选，不要改走 `analytics_data` 试错                    |
+| `server_type + tool_name` 必须存在于 `references/tool-manifest.json`                         | CLI 会在真正调用后端前返回 `UNKNOWN_TOOL_NAME`；按 stdout JSON 的 `error.context.available_tools` 重选，不要改走 `analytics_data` 试错                    |
 | 单工具调用**只支持单标的**                                                                 | 逗号分隔多代码后端只识别第 1 个，其余静默忽略                                                                            |
 | Codex 中调用 Wind 后端联网必须使用 `require_escalated`                                         | 否则沙箱内可能 `fetch failed`                                                                                          |
 | 结果末尾**必须标注**「数据来源于万得 Wind 金融数据服务」                                   | 合规要求                                                                                                                 |
@@ -375,23 +398,30 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 | 多市场对比（`苹果 vs 腾讯`）          | 美股走 `global_stock_data`，港股走 `global_stock_data`，分别调                                         |
 | 指数行情 vs 指数基本面                  | 行情走 `index_data` 行情类；PE / PB 历史分位走 `get_index_fundamentals`（NL）                          |
 | 债券需要快照？                          | `bond_data` 没有行情类 → 用 `get_bond_market_data`（NL）描述要哪些指标                                |
-| NL `question` / `query` 写法          | 普通档案类可短句 |
+| NL `question` / `query` 写法          | **禁止空格**，用标点或直接连接 |
 
 ---
 
 ## 7. 出错怎么办
 
-cli.mjs 大部分错误会自动输出错误码 + 处理建议（stderr），照建议走即可。常见 schema 类陷阱：
+cli.mjs 大部分错误会自动输出结构化 JSON。只解析 stdout，不从 stderr 提取错误信息。常见 schema 类陷阱：
 
-### CLI 错误处理
+### CLI 错误处理硬约束
 
-`cli.mjs` 只输出错误码、后端消息和 `处理建议:`，不再附带额外的机器可读重试协议。处理时按 stderr 的 `处理建议:` 执行，并遵守以下规则：
+`cli.mjs` 失败时返回 `ok:false`。默认优先按 `error.agent_action` 处理；如需偏离，必须同时满足以下硬约束，并能明确说明偏离原因：
 
-- JSON 解析、未知 `server_type`、未知 `tool_name`、Key、权限、限流、余额、网络、后端 5xx 等错误，不得改走 `analytics_data`；应先修正调用方式、配置或等待后端恢复。
-- 专项工具报字段、工具或口径类错误时，先按 `## 3. 工具表` 检查 `server_type` / `tool_name` / `params_json` 并重试一次。
-- 若专项工具重试后仍为工具调用错误，且问题属于结构化取数，可改用 `analytics_data.get_financial_data`；fallback 前必须把复杂问题拆成简单取数问题，不要机械照搬复杂原话。
+- 不得只参考 `error.hint`、示例命令或经验写法来覆盖 `error.agent_action`。
+- `error.retryable=false` 时禁止原样重试；必须先修改参数、配置、环境，或等待状态变化。
+- `error.fallback_allowed=false` 时禁止改用 `analytics_data`、wind-alice、Web Search 或其它数据源兜底。
+- `INVALID_PARAMS_JSON` 只能修正 JSON 或 shell 转义后重试同一个 `server_type + tool_name`，不得切换工具。
+- `UNKNOWN_TOOL_NAME` 只能从 `error.context.available_tools` 或 `references/tool-manifest.json` 中重选合法工具，不得直接 fallback。
+- Key、权限、限流、余额、网络、后端 5xx 类错误不得换工具绕过；必须修复根因、等待恢复或告知用户。
+- `PARAM_VALIDATION_ERROR` 先按 `## 3. 工具表`、`references/tool-manifest.json`、`references/indicators.md` 修正字段名、必填项、日期格式、枚举值、server_type 和 tool_name。
+- 只有 `error.fallback_allowed=true` 且符合本文路由约束时，才可考虑 `analytics_data`；fallback 前必须把复杂问题拆成简单取数问题，不要机械照搬复杂原话。
 - `analytics_data.get_financial_data` 失败时（非 Key / 权限 / 网络 / 5xx 类错误），可调整 `question` 措辞重试一次（如拆分子问题、换关键词），不得改变用户原始意图。
 - 如果 `analytics_data.get_financial_data` 重试后仍返回未知错误或没找到数据，停止继续 fallback，把后端原文、错误码和已尝试路径简要告知用户，然后执行以下终极兜底：
+
+错误码字典见 `references/error-codes.json`。
 
 ### 终极兜底：wind-alice
 
@@ -420,7 +450,7 @@ cli.mjs 大部分错误会自动输出错误码 + 处理建议（stderr），照
 | 错误                                           | 解法                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------ |
 | `indexes` 字段不识别 / 字段名不存在          | 按 `references/indicators.md` 复制表内字段名（不要自己拼）；仍不可用则改用对应 NL 工具或说明快照字段不可用 |
-| 工具不存在 / 未知 server_type / 未知 tool_name / schema 对不上  | 先查看 `references/tool-manifest.json` 或 CLI stderr 输出的候选工具，再按 `## 1. 数据范围` 和 `## 3. 工具表` 重新核对 `server_type` / `tool_name` / `params_json` 并重试一次；仍不通过再建议升级 skill |
+| 工具不存在 / 未知 server_type / 未知 tool_name / schema 对不上  | 先查看 `references/tool-manifest.json` 或 stdout JSON 的 `error.context.available_tools`，再按 `## 1. 数据范围` 和 `## 3. 工具表` 重新核对 `server_type` / `tool_name` / `params_json` 并重试一次；仍不通过再建议升级 skill |
 | 美股 / 港股调用 `stock_data` 工具返空 / 报错 | 切到 `global_stock_data` 同名工具（参数签名一致）                |
 | 调用似乎啥都没报                               | 检查命令是否在本 SKILL.md 所在目录下执行                           |
 
@@ -428,8 +458,9 @@ cli.mjs 大部分错误会自动输出错误码 + 处理建议（stderr），照
 
 ## 8. 保持最新
 
-每次调用 cli.mjs 后，留意 stderr 是否包含 `[wind-skills] 检测到 N 个 skill 有新版`。
+每次调用 cli.mjs 后，留意 stdout JSON 的 `notices` 数组。
 
-**看到该提示时，会话首次必须转告用户一次**（同会话再次调用不重复）：把清单和升级命令完整带给用户，命令已含 `-g -y` 等参数，直接照搬即可。Gitee 装的 skill 升级路径跟 GitHub 不同，按 stderr 提示走。
+- `type="update_available"`：会话首次必须转告用户一次（同会话再次调用不重复），把 `items[].upgrade_command` 完整带给用户，命令已含 `-g -y` 等参数，直接照搬即可。Gitee 装的 skill 升级路径跟 GitHub 不同，按 `upgrade_command` 走。
+- `type="update_check_failed"` / `type="update_check_unknown"`：只是更新检查提醒，不影响当前 Wind 数据调用；可简要告知用户，不能当作主调用失败。
 
-⚠️ 如遇"工具不存在 / 字段不符"等疑似版本相关错误，先按本文档工具清单、工具表和 CLI stderr 建议重新检查 `server_type` / `tool_name` / `params_json` 并重试一次；检查仍不通过或确认本地 schema 与文档不一致后，再建议用户跑 `npx skills update -g -y` 拉最新后重试。
+⚠️ 如遇"工具不存在 / 字段不符"等疑似版本相关错误，先按本文档工具清单、工具表和 stdout JSON 的 `error.agent_action` / `error.context` 重新检查 `server_type` / `tool_name` / `params_json` 并重试一次；检查仍不通过或确认本地 schema 与文档不一致后，再建议用户跑 `npx skills update -g -y` 拉最新后重试。

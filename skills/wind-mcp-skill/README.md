@@ -41,13 +41,13 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 需要 `WIND_API_KEY`（登录 [aimarket.wind.com.cn 开发者中心](https://aimarket.wind.com.cn/#/user/overview) 获取）。
 
-装好后向 AI 提一个 wind 数据问题，AI 会按 stderr 引导完成 Key 配置——无需手动管路径。也可以在本 skill 目录下运行：
+装好后向 AI 提一个 wind 数据问题，AI 会按 stdout JSON envelope 里的 `error.agent_action` / `error.hint` 引导完成 Key 配置——无需手动管路径。也可以在本 skill 目录下运行：
 
 ```bash
 node scripts/cli.mjs open-portal
 ```
 
-如果 CLI 报 `KEY_MISSING`，按 stderr 的 `extraHint` 配置即可；程序会自动查找环境变量 `WIND_API_KEY` 和常见本地配置文件。
+如果 CLI 报 `KEY_MISSING`，按 stdout JSON 里的 `error.agent_action` / `error.hint` 配置即可；程序会自动查找环境变量 `WIND_API_KEY` 和常见本地配置文件。
 
 ---
 
@@ -69,7 +69,7 @@ node scripts/cli.mjs open-portal
 npx skills update wind-mcp-skill -g -y
 ```
 
-调用时 stderr 若提示有新版，按提示走即可。
+调用后如果 stdout JSON 的 `notices` 里出现 `update_available`，按 `items[].upgrade_command` 走即可。
 
 ---
 

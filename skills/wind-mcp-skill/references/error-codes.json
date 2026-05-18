@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "description": "wind-mcp-skill CLI 错误码字典。CLI 内置一份兼容的分类、重试、fallback 与 agent_action 规则，运行时不依赖本文件。",
+  "codes": {
+    "USAGE_ERROR": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "读取 data.usage，按可用子命令和参数格式重新构造命令。"
+    },
+    "INVALID_PARAMS_JSON": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "修正 params_json 或 shell 转义后重试，不要切换工具。"
+    },
+    "UNKNOWN_SERVER_TYPE": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "从 error.hint 或 SKILL.md 的可用 server_type 中重新选择。"
+    },
+    "UNKNOWN_TOOL_NAME": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "读取 error.context.available_tools，并按意图路由规则为当前 server_type 重新选择合法工具。"
+    },
+    "TOOL_MANIFEST_INVALID": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "检查 references/tool-manifest.json 是否存在且为合法 JSON；本地 skill 安装可能不完整或损坏。"
+    },
+    "UNKNOWN_SCOPE": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "让用户选择 Key 存放位置后，用 --scope global 或 --scope skill 重试 setup-key。"
+    },
+    "OPEN_PORTAL_FAILED": {
+      "category": "client",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "把 data.url 告知用户，让用户在自己的浏览器中手动打开。"
+    },
+    "PARAM_VALIDATION_ERROR": {
+      "category": "schema",
+      "retryable": false,
+      "fallback_allowed": true,
+      "agent_action": "先按 SKILL.md 和 references 核对字段名、必填项、日期格式、枚举值、server_type 和 tool_name；专项工具修正后仍不适合时，才考虑 analytics_data。"
+    },
+    "CONFIG_WRITE_ERROR": {
+      "category": "filesystem",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "检查目标配置路径是否可写，或让用户改选 setup-key 的另一种 scope。"
+    },
+    "KEY_MISSING": {
+      "category": "auth",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "引导用户获取 WIND_API_KEY 并用 setup-key 配置；不要改用 analytics_data。"
+    },
+    "KEY_INVALID": {
+      "category": "auth",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "让用户重新生成或替换 API Key，不要通过切换 Wind 工具绕过。"
+    },
+    "KEY_FORBIDDEN_SERVER": {
+      "category": "auth",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "当前 Key 可能没有该 server 权限；让用户确认权限或选择已授权的数据服务。"
+    },
+    "RATE_LIMIT_DAILY": {
+      "category": "quota",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "日额度已用尽，等待额度刷新或更换有效 Key。"
+    },
+    "RATE_LIMIT_QPS": {
+      "category": "quota",
+      "retryable": true,
+      "fallback_allowed": false,
+      "agent_action": "短暂等待后原样重试，不要为了绕过 QPS 而切换工具。"
+    },
+    "BALANCE_INSUFFICIENT": {
+      "category": "quota",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "提示用户充值或更换有余额的有效 Key。"
+    },
+    "NETWORK_ERROR": {
+      "category": "network",
+      "retryable": true,
+      "fallback_allowed": false,
+      "agent_action": "检查网络、代理、DNS、超时或 Codex 沙箱联网权限，然后原样重试。"
+    },
+    "SERVER_5XX": {
+      "category": "backend",
+      "retryable": true,
+      "fallback_allowed": false,
+      "agent_action": "稍后原样重试；若提示超时，可降低请求复杂度。"
+    },
+    "RESPONSE_PARSE_ERROR": {
+      "category": "backend",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "后端响应格式异常或发生变化；保留原始错误信息并联系 Wind 支持。"
+    },
+    "NO_RESULTS": {
+      "category": "backend",
+      "retryable": false,
+      "fallback_allowed": true,
+      "agent_action": "在不改变用户意图的前提下调整关键词或参数；专项路径仍不适合时，可用 analytics_data 做结构化取数兜底。"
+    },
+    "MCP_PROTOCOL_ERROR": {
+      "category": "backend",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "检查 error.message；若能明确修正请求形态则修正，否则保留后端原文并联系支持。"
+    },
+    "TOOL_RUNTIME_ERROR": {
+      "category": "backend",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "保留后端原文，检查请求规模、字段口径和数据覆盖；不能明确修正时停止并告知用户。"
+    },
+    "UNKNOWN": {
+      "category": "unknown",
+      "retryable": false,
+      "fallback_allowed": false,
+      "agent_action": "不要盲目重试；先检查 error.message 和 context，能明确定位本地问题则修正，否则报告原始错误。"
+    }
+  }
+}

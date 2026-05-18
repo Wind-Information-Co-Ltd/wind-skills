@@ -1,4 +1,4 @@
----
+﻿---
 name: breakout_candidate_finder_skill
 description: 批量识别突破形态成熟、量价结构健康、催化配合较好的候选股，并输出优先级、触发条件与失效边界。适用于短中线选股、盘前候选池整理、板块轮动中筛选领涨预备股等场景。
 key words: 突破候选，breakout，短中线选股，形态突破，候选池
@@ -8,34 +8,8 @@ key words: 突破候选，breakout，短中线选股，形态突破，候选池
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据源。执行本技能前，必须先检测 `wind-mcp-skill` 是否已安装且可用。
+本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
 
-可用性判断至少包括：
-
-- `wind-mcp-skill` 已安装；
-- 其 CLI / MCP 调用入口可执行；
-- `WIND_API_KEY` 已配置；
-- 能完成一次最小 Wind 查询并返回有效数据。
-
-若 `wind-mcp-skill` 已安装且可用，先通过该技能获取并整理行情、K 线、成交量、换手率、指数环境、板块表现、公告新闻等必要数据，再进入候选筛选。
-
-若未安装 `wind-mcp-skill`，先向用户推荐安装，并说明缺少 Wind 数据源会影响突破候选筛选的可靠性。
-
-推荐安装命令：
-
-```bash
-npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
-```
-
-若 GitHub 源不可用，使用 Gitee 镜像：
-
-```bash
-npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
-```
-
-若已安装但不可用，应说明具体原因，例如缺少 `WIND_API_KEY`、CLI 不可执行、接口返回错误或额度不足，并先协助用户补齐数据条件。
-
-若尚未取得足够的 Wind 数据，不应直接给出突破候选结论；只能输出框架性判断、所需数据清单，或等待数据补齐后再筛选。
 
 ## 技能定位
 

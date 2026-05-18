@@ -1,4 +1,4 @@
----
+﻿---
 name: theme_leader_identification_skill
 description: 识别热门题材中的龙头、中军、跟随股与掉队股，判断谁最值得优先跟踪，并输出题材阶段、驱动链条与风险提示。适用于题材轮动选股、热点复盘、板块主线判断等场景。
 key words: 题材龙头，theme leader，热点龙头，题材轮动，主线判断
@@ -8,34 +8,8 @@ key words: 题材龙头，theme leader，热点龙头，题材轮动，主线判
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据源。执行本技能前，必须先检测 `wind-mcp-skill` 是否已安装且可用。
+本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
 
-可用性判断至少包括：
-
-- `wind-mcp-skill` 已安装；
-- 其 CLI / MCP 调用入口可执行；
-- `WIND_API_KEY` 已配置；
-- 能完成一次最小 Wind 查询并返回有效数据。
-
-若 `wind-mcp-skill` 已安装且可用，先通过该技能获取并整理行情、K 线、成交量、换手率、指数环境、板块表现、公告新闻等必要数据，再进入分析或筛选。
-
-若未安装 `wind-mcp-skill`，先向用户推荐安装，并说明缺少 Wind 数据源会影响分析结论的可靠性。
-
-推荐安装命令：
-
-```bash
-npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
-```
-
-若 GitHub 源不可用，使用 Gitee 镜像：
-
-```bash
-npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
-```
-
-若已安装但不可用，应说明具体原因，例如缺少 `WIND_API_KEY`、CLI 不可执行、接口返回错误或额度不足，并先协助用户补齐数据条件。
-
-若尚未取得足够的 Wind 数据，不应直接给出确定性结论；只能输出框架性判断、所需数据清单，或等待数据补齐后再分析。
 
 ## 技能定位
 

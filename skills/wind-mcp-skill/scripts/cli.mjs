@@ -1,20 +1,17 @@
 #!/usr/bin/env node
-// wind-mcp-skill
-// 访问万得 Wind 金融数据 — 按数据域分类调用
-// SERVERS: stock_data / global_stock_data / fund_data / index_data / bond_data
-//          / financial_docs / economic_data / analytics_data
-// 调用签名: call(server_type, tool_name, params)
-// 注: stock/global_stock/fund/index 各包含行情类工具(*_price_indicators / *_kline / *_quote)
-//     + NL 类工具(财务 / 档案等),入参模式不同,见 SKILL.md 工具表
-
+// wind-mcp-skill CLI: thin JSON-envelope wrapper around Wind MCP servers.
+// Keep this file self-contained for skill portability; heavier reference material lives in SKILL.md/references.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-const SKILL_VERSION = '1.5.0';
+const SKILL_VERSION = '1.6.0';
+const OUTPUT_SCHEMA_VERSION = 1;
+let activeCommand = 'help';
 
+// Server registry is intentionally local data so tool selection can fail before any network call.
 const SERVERS = {
   stock_data: {
     endpoint: 'https://mcp.wind.com.cn/vserver_stock_data/mcp/',
@@ -58,7 +55,17 @@ const UPDATE_CHECK_PATH = join(SKILL_DIR, 'scripts', 'update-check.mjs');
 const UPDATE_STATE_FILE = join(homedir(), '.cache', 'wind-aimarket', 'update-state.json');
 const TOOL_MANIFEST_PATH = join(SKILL_DIR, 'references', 'tool-manifest.json');
 
-// 异步 spawn 探活子进程,detached + 静默,不阻塞主流程
+const CALL_EXAMPLES = [
+  `cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH 公司基本档案"}'`,
+  `cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅"}'`,
+  `cli.mjs call fund_data get_fund_kline '{"windcode":"588200.SH","begin_date":"20260401","end_date":"20260430"}'`,
+  `cli.mjs call global_stock_data get_global_stock_quote '{"windcode":"AAPL.O"}'`,
+  `cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"20260401","end_date":"20260430"}'`,
+  `cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":3}'`,
+  `cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国GDP"}'`,
+  `cli.mjs call analytics_data get_financial_data '{"question":"查询中国A股市场过去一年的平均成交量"}'`,
+];
+
 function spawnUpdateCheck() {
   try {
     if (!existsSync(UPDATE_CHECK_PATH)) return;
@@ -68,9 +75,6 @@ function spawnUpdateCheck() {
   } catch {}
 }
 
-// 读 lock,返回 name → installed hash 映射
-// 用于 notify 前自检:用户已升级时(lock hash 跟 cache.outdated.current 不一致)
-// 抑制本次提示并删 cache,让下次 spawn 重新拉真值。
 function getInstalledHashes() {
   const result = {};
   const candidates = new Set();
@@ -100,8 +104,6 @@ function getInstalledHashes() {
   return result;
 }
 
-// 把 outdated 里 lock hash 已经变了的条目过滤掉(用户已升级)
-// current 字段是 cache 写入时记录的安装 hash 短形式;lock hash 全长,取前 N 位比对。
 function filterAlreadyUpgraded(outdated) {
   const installed = getInstalledHashes();
   return outdated.filter(o => {
@@ -114,22 +116,13 @@ function filterAlreadyUpgraded(outdated) {
   });
 }
 
-// 主流程末尾:状态修正 + 按 status 分支提示
-// Phase 1 状态修正(snooze 不阻塞):
-//   - update_available 但 lock 已升过 → 原地改写为 up_to_date(全升)/缩小 outdated(部分升)
-// Phase 2 snooze 控制 — 仅影响是否打印
-// Phase 3 按状态打印:
-//   update_available → 详细提示(GitHub: skills update;Gitee: skills add 重装)
-//   transient_error  → 单行短提示(网络抖)
-//   unknown          → 单行短提示(配置/结构问题)
-//   up_to_date       → 静默
-function maybePrintUpdateNotice() {
+function collectUpdateNotices() {
   try {
-    if (!existsSync(UPDATE_STATE_FILE)) return;
+    if (!existsSync(UPDATE_STATE_FILE)) return [];
     const original = JSON.parse(readFileSync(UPDATE_STATE_FILE, 'utf8'));
     let state = original;
 
-    // ── Phase 1:状态修正(永远跑,不受 snooze 影响)──
+    // 先修正已升级但缓存仍提示过期的状态，再决定是否返回 notice。
     if (state.status === 'update_available' && Array.isArray(state.outdated) && state.outdated.length > 0) {
       const stillOutdated = filterAlreadyUpgraded(state.outdated);
       if (stillOutdated.length === 0) {
@@ -147,50 +140,82 @@ function maybePrintUpdateNotice() {
       }
     }
 
-    // ── Phase 2:snooze 期内不打印,但 cache 已经更新过了 ──
-    if (state.snoozedUntil && new Date(state.snoozedUntil) > new Date()) return;
+    if (state.snoozedUntil && new Date(state.snoozedUntil) > new Date()) return [];
 
-    // ── Phase 3:按状态打印 ──
     if (state.status === 'update_available') {
-      const lines = ['', `[wind-skills] 检测到 ${state.outdated.length} 个 skill 有新版:`];
-      for (const o of state.outdated) {
+      return [{
+        type: 'update_available',
+        severity: 'info',
+        message: `检测到 ${state.outdated.length} 个 skill 有新版`,
+        items: state.outdated.map((o) => {
         const isGitee = typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com');
         const upgradeCmd = isGitee
           ? `npx skills add ${o.sourceUrl} --skill ${o.name} -g -y  # Gitee 源不支持 update,需重装`
           : `npx skills update ${o.name} -g -y`;
-        lines.push(`  • ${o.name.padEnd(34)} ${o.current || '?'} → ${o.latest}`);
-        lines.push(`    升级: ${upgradeCmd}`);
-      }
-      lines.push('');
-      process.stderr.write(lines.join('\n') + '\n');
-      return;
+          return {
+            name: o.name,
+            current: o.current || null,
+            latest: o.latest || null,
+            source: isGitee ? 'gitee' : 'github',
+            source_url: o.sourceUrl || null,
+            upgrade_command: upgradeCmd,
+          };
+        }),
+      }];
     }
 
     if (state.status === 'transient_error') {
-      process.stderr.write(`\n[wind-skills] 检查更新失败,可能是网络问题(reason=${state.reason || 'unknown'})\n\n`);
-      return;
+      return [{
+        type: 'update_check_failed',
+        severity: 'warn',
+        reason: state.reason || 'unknown',
+        message: '检查更新失败，可能是网络问题',
+      }];
     }
 
     if (state.status === 'unknown') {
-      process.stderr.write(`\n[wind-skills] 无法确认是否最新(reason=${state.reason || 'unknown'})\n\n`);
-      return;
+      return [{
+        type: 'update_check_unknown',
+        severity: 'warn',
+        reason: state.reason || 'unknown',
+        message: '无法确认 wind skills 是否最新',
+      }];
     }
-    // up_to_date / 其他 → 静默
   } catch {}
+  return [];
 }
 
 // ───── 工具函数 ─────
 
-// 注：die() 强制走错误码体系（formatError），输出格式统一。
-//     纯帮助信息（USAGE / 缺参提示）走 exitWithUsage()，不套错误码。
+function writeEnvelope({ ok, command = activeCommand, data, error, notices = [] }) {
+  // All agent-facing output must go through this envelope. Keep stderr free for future verbose logs only.
+  const envelope = {
+    ok,
+    command,
+    ...(data === undefined ? {} : { data }),
+    ...(error ? { error } : {}),
+    notices,
+    meta: { cli_version: SKILL_VERSION, schema_version: OUTPUT_SCHEMA_VERSION },
+  };
+  process.stdout.write(JSON.stringify(envelope, null, 2) + '\n');
+}
+
 function die(code, message, ctx = {}, exitCode = 1) {
-  process.stderr.write(formatError(code, message, ctx) + '\n');
+  writeEnvelope({
+    ok: false,
+    command: ctx.command || activeCommand,
+    data: ctx.data,
+    error: buildErrorObject(code, message, ctx),
+  });
   process.exit(exitCode);
 }
 
 function exitWithUsage(usage, exitCode = 0) {
-  process.stderr.write(usage + '\n');
-  process.exit(exitCode);
+  die('USAGE_ERROR', '命令用法不正确', {
+    command: activeCommand || 'help',
+    data: { usage },
+    extraHint: '按 data.usage 修正命令参数后重试。',
+  }, exitCode);
 }
 
 function maskKey(key) {
@@ -198,8 +223,7 @@ function maskKey(key) {
   return key.slice(0, 4) + '***' + key.slice(-4);
 }
 
-// 解析 dotenv 风格配置文件（KEY=VALUE 每行一对）
-// 支持：# 注释、空行、引号包裹值、export 前缀、行内注释
+// 解析 dotenv 风格配置文件，兼容注释、引号和 export 前缀。
 function parseDotenv(content) {
   const env = {};
   for (const rawLine of content.split('\n')) {
@@ -233,6 +257,7 @@ function getServer(server_type) {
 
 function loadToolManifest() {
   try {
+    // tool-manifest.json is the authority for legal server_type + tool_name combinations.
     const manifest = JSON.parse(readFileSync(TOOL_MANIFEST_PATH, 'utf8'));
     if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
       throw new Error('manifest 顶层必须是对象');
@@ -265,6 +290,8 @@ function validateToolSelection(server_type, toolName) {
   if (!tools.includes(toolName)) {
     die('UNKNOWN_TOOL_NAME', `工具名不属于 ${server_type}: ${toolName}`, {
       server_type,
+      tool: toolName,
+      available_tools: tools,
       extraHint:
         `请不要继续试错调用。先按 SKILL.md 意图路由重新判断 server_type + tool_name。\n` +
         `当前 server_type 可用工具: ${tools.join(' / ')}`,
@@ -295,31 +322,21 @@ function getApiKey() {
 
   die('KEY_MISSING', 'WIND_API_KEY 未配置', {
     extraHint:
-      `① 获取 Key（建议先问用户是否同意打开浏览器）：\n` +
-      `   $ node ${join(SKILL_DIR, 'scripts', 'cli.mjs')} open-portal\n` +
-      `   或手动访问：${PORTAL_URL}（未登录会自动跳到 /#/login）\n\n` +
-      `② 用 AskUserQuestion 让用户选 Key 存放位置（不要替用户挑默认）：\n` +
-      `   A. 全局共享【推荐 — 所有 wind skill 共用】\n` +
-      `   B. 仅当前 skill\n\n` +
-      `③ 拿到用户选择后调：\n` +
-      `   $ node ${join(SKILL_DIR, 'scripts', 'cli.mjs')} setup-key <KEY> --scope <global|skill>\n\n` +
-      `④ 重试原 Wind 调用`,
+      `先获取 Key：node ${join(SKILL_DIR, 'scripts', 'cli.mjs')} open-portal，或手动访问 ${PORTAL_URL}。\n` +
+      `询问用户选择存放位置后执行：node ${join(SKILL_DIR, 'scripts', 'cli.mjs')} setup-key <KEY> --scope <global|skill>，然后重试原调用。`,
   });
 }
 
 // ───── 错误码体系 ─────
 
-// 错误码识别 + 处理建议（按 message 模式匹配）
-// 注：第三列 hint 仅是 inferErrorCode + getErrorHint 的默认提示；
-//     具体调用 formatError 时可通过 extraHint 覆盖（client 端错误码常用此机制）。
 const ERROR_PATTERNS = [
-  // ── 后端 / 协议错误（mcpRequest 自动识别）──
   ['RATE_LIMIT_DAILY',     /单日请求次数超限|daily.*limit/i,                       'API Key 当日请求额度已用尽。等次日 0 点刷新或换备用 Key。'],
   ['BALANCE_INSUFFICIENT', /余额不足|请先充值|insufficient.*balance/i,             'API Key 计费余额不足。开发者中心充值或换备用 Key。'],
   ['RATE_LIMIT_QPS',       /请求过于频繁|qps.*limit|too.*frequent/i,               '请求过于频繁。等几秒重试（可重试）。'],
   ['KEY_INVALID',          /密钥无效|key.*invalid|unauthorized|认证失败|auth.*fail/i,   'API Key 无效或过期 → 开发者中心重新生成。'],
-  ['NO_RESULTS',           /未获取到数据|"NO_RESULTS"/,                            '未获取到匹配数据。调整 question 关键词，或换工具/server 重试。'],
-  // ── client 端错误（cli.mjs 主动 die）──
+  ['NO_RESULTS',           /未获取到数据|"NO_RESULTS"|no\s*results?|not\s*found|empty\s*result/i, '未获取到匹配数据。先在不改变用户意图的前提下调整关键词或参数。'],
+  ['PARAM_VALIDATION_ERROR', /参数验证失败|参数.*(错误|非法|无效)|字段.*(不存在|不识别|不支持|非法)|invalid\s*(param|argument|field)|missing\s*(param|argument|field|required)/i, '后端参数验证失败。先按 SKILL.md 工具表核对字段名、必填项、日期格式和枚举值后重试。'],
+  ['TOOL_RUNTIME_ERROR',    /TOOL_ERROR|tool.*error|工具.*(执行|运行).*错误|runtime.*error/i,      '后端工具运行错误。保留后端原文，先检查请求是否过大或口径是否受支持；不要直接切换工具绕过。'],
   ['KEY_MISSING',          /WIND_API_KEY 未配置/,                                   'API Key 未配置。先 `node scripts/cli.mjs open-portal` 拿 Key，再选三种方式之一配置。'],
   ['UNKNOWN_SERVER_TYPE',  /未知 server_type/,                                      'server_type 不在可用列表内。先 `cli.mjs` 看 USAGE 列表，按列表填。'],
   ['UNKNOWN_TOOL_NAME',    /工具名不属于/,                                           'tool_name 不在该 server_type 的工具清单内。按 SKILL.md 和 references/tool-manifest.json 重新选择。'],
@@ -327,6 +344,7 @@ const ERROR_PATTERNS = [
   ['INVALID_PARAMS_JSON',  /params JSON 解析失败/,                                  '`call` 命令第三参数必须是合法 JSON 字符串。注意 shell 转义（建议外层用单引号包裹整个 JSON）。'],
 ];
 
+// 错误 message 可能来自 HTTP、JSON-RPC 或工具内嵌 JSON，统一映射成稳定错误码。
 function inferErrorCode(msg) {
   if (!msg) return 'UNKNOWN';
   for (const [code, pat] of ERROR_PATTERNS) {
@@ -339,55 +357,103 @@ function getErrorHint(code, fallback) {
   for (const [c, , hint] of ERROR_PATTERNS) {
     if (c === code) return hint;
   }
+  if (code === 'TOOL_RUNTIME_ERROR') {
+    return '后端工具运行错误。保留后端原文，先检查请求规模、字段口径和数据覆盖；不要直接切换工具绕过。';
+  }
   return fallback || '未知错误，参考后端原文 + 联系万得支持。';
 }
 
+// Keep these behavior tables compatible with references/error-codes.json.
+// They remain in-file so the CLI can still produce errors if reference files are missing.
+const NO_FALLBACK_CODES = new Set([
+  'INVALID_PARAMS_JSON', 'UNKNOWN_SERVER_TYPE', 'UNKNOWN_TOOL_NAME', 'TOOL_MANIFEST_INVALID', 'UNKNOWN_SCOPE',
+  'USAGE_ERROR', 'OPEN_PORTAL_FAILED', 'CONFIG_WRITE_ERROR', 'KEY_MISSING', 'KEY_INVALID', 'KEY_FORBIDDEN_SERVER',
+  'RATE_LIMIT_DAILY', 'RATE_LIMIT_QPS', 'BALANCE_INSUFFICIENT', 'NETWORK_ERROR',
+  'SERVER_5XX', 'RESPONSE_PARSE_ERROR', 'MCP_PROTOCOL_ERROR', 'TOOL_RUNTIME_ERROR', 'UNKNOWN',
+]);
+const RETRYABLE_CODES = new Set(['RATE_LIMIT_QPS', 'NETWORK_ERROR', 'SERVER_5XX']);
+const ERROR_CATEGORIES = [
+  ['client', new Set(['USAGE_ERROR', 'INVALID_PARAMS_JSON', 'UNKNOWN_SERVER_TYPE', 'UNKNOWN_TOOL_NAME', 'TOOL_MANIFEST_INVALID', 'UNKNOWN_SCOPE', 'OPEN_PORTAL_FAILED'])],
+  ['schema', new Set(['PARAM_VALIDATION_ERROR'])],
+  ['filesystem', new Set(['CONFIG_WRITE_ERROR'])],
+  ['auth', new Set(['KEY_MISSING', 'KEY_INVALID', 'KEY_FORBIDDEN_SERVER'])],
+  ['quota', new Set(['RATE_LIMIT_DAILY', 'RATE_LIMIT_QPS', 'BALANCE_INSUFFICIENT'])],
+  ['network', new Set(['NETWORK_ERROR'])],
+  ['backend', new Set(['SERVER_5XX', 'RESPONSE_PARSE_ERROR', 'NO_RESULTS', 'MCP_PROTOCOL_ERROR', 'TOOL_RUNTIME_ERROR'])],
+];
+const AGENT_ACTIONS = {
+  USAGE_ERROR: '读取 data.usage，按可用子命令和参数格式重新构造命令。',
+  INVALID_PARAMS_JSON: '修正 params_json 或 shell 转义后重试，不要切换工具。',
+  UNKNOWN_SERVER_TYPE: '从 error.hint 或 SKILL.md 的可用 server_type 中重新选择。',
+  UNKNOWN_TOOL_NAME: '读取 error.context.available_tools，并按意图路由规则为当前 server_type 重新选择合法工具。',
+  TOOL_MANIFEST_INVALID: '检查 references/tool-manifest.json 是否存在且为合法 JSON；本地 skill 安装可能不完整或损坏。',
+  UNKNOWN_SCOPE: '让用户选择 Key 存放位置后，用 --scope global 或 --scope skill 重试 setup-key。',
+  OPEN_PORTAL_FAILED: '把 data.url 告知用户，让用户在自己的浏览器中手动打开。',
+  PARAM_VALIDATION_ERROR: '先按 SKILL.md 和 references 核对字段名、必填项、日期格式、枚举值、server_type 和 tool_name；专项工具修正后仍不适合时，才考虑 analytics_data。',
+  CONFIG_WRITE_ERROR: '检查目标配置路径是否可写，或让用户改选 setup-key 的另一种 scope。',
+  KEY_MISSING: '引导用户获取 WIND_API_KEY 并用 setup-key 配置；不要改用 analytics_data。',
+  KEY_INVALID: '让用户重新生成或替换 API Key，不要通过切换 Wind 工具绕过。',
+  KEY_FORBIDDEN_SERVER: '当前 Key 可能没有该 server 权限；让用户确认权限或选择已授权的数据服务。',
+  RATE_LIMIT_DAILY: '日额度已用尽，等待额度刷新或更换有效 Key。',
+  RATE_LIMIT_QPS: '短暂等待后原样重试，不要为了绕过 QPS 而切换工具。',
+  BALANCE_INSUFFICIENT: '提示用户充值或更换有余额的有效 Key。',
+  NETWORK_ERROR: '检查网络、代理、DNS、超时或 Codex 沙箱联网权限，然后原样重试。',
+  SERVER_5XX: '稍后原样重试；若提示超时，可降低请求复杂度。',
+  RESPONSE_PARSE_ERROR: '后端响应格式异常或发生变化；保留原始错误信息并联系 Wind 支持。',
+  NO_RESULTS: '在不改变用户意图的前提下调整关键词或参数；专项路径仍不适合时，可用 analytics_data 做结构化取数兜底。',
+  MCP_PROTOCOL_ERROR: '检查 error.message；若能明确修正请求形态则修正，否则保留后端原文并联系支持。',
+  TOOL_RUNTIME_ERROR: '保留后端原文，检查请求规模、字段口径和数据覆盖；不能明确修正时停止并告知用户。',
+  UNKNOWN: '不要盲目重试；先检查 error.message 和 context，能明确定位本地问题则修正，否则报告原始错误。',
+};
+
+function errorCategory(code) {
+  return ERROR_CATEGORIES.find(([, codes]) => codes.has(code))?.[0] || 'unknown';
+}
+
+function fallbackAllowed(code, server_type) {
+  return Boolean(server_type && server_type !== 'analytics_data' && !NO_FALLBACK_CODES.has(code));
+}
+
 function appendFallbackHint(code, hint, server_type) {
-  const noFallbackCodes = new Set([
-    'INVALID_PARAMS_JSON',
-    'UNKNOWN_SERVER_TYPE',
-    'UNKNOWN_TOOL_NAME',
-    'TOOL_MANIFEST_INVALID',
-    'UNKNOWN_SCOPE',
-    'KEY_MISSING',
-    'KEY_INVALID',
-    'KEY_FORBIDDEN_SERVER',
-    'RATE_LIMIT_DAILY',
-    'RATE_LIMIT_QPS',
-    'BALANCE_INSUFFICIENT',
-    'NETWORK_ERROR',
-    'RESPONSE_PARSE_ERROR',
-    'SERVER_5XX',
-  ]);
-  if (!server_type || server_type === 'analytics_data' || noFallbackCodes.has(code)) return hint;
+  if (!fallbackAllowed(code, server_type)) return hint;
+  if (code === 'PARAM_VALIDATION_ERROR') {
+    return `${hint} 若修正后仍为工具调用错误，且问题属于结构化取数，可改用 analytics_data.get_financial_data。`;
+  }
+  if (code === 'NO_RESULTS') {
+    return `${hint} 若专项路径仍无可用结果，且问题属于结构化取数，可改用 analytics_data.get_financial_data。`;
+  }
   return `${hint} 请先按 SKILL.md 工具表检查 server_type、tool_name 和入参后重试一次；若仍为工具调用错误，可改用 analytics_data.get_financial_data，并将 question 简化为结构化取数问题。`;
 }
 
-function formatError(code, backendMsg, ctx = {}) {
+function buildErrorObject(code, backendMsg, ctx = {}) {
   const { server_type, apiKey, extraHint } = ctx;
   const hint = appendFallbackHint(code, extraHint || getErrorHint(code), server_type);
-  return [
-    `❌ MCP 错误 [${code}]`,
-    ``,
-    server_type ? `server_type: ${server_type}` : '',
-    apiKey ? `api key:     ${maskKey(apiKey)}` : '',
-    `后端消息:    ${backendMsg}`,
-    `处理建议:    ${hint}`,
-  ].filter(Boolean).join('\n');
+  const context = {
+    ...(server_type ? { server_type } : {}),
+    ...(ctx.tool ? { tool: ctx.tool } : {}),
+    ...(apiKey ? { api_key_masked: maskKey(apiKey) } : {}),
+    ...(ctx.available_tools ? { available_tools: ctx.available_tools } : {}),
+  };
+  return {
+    code,
+    message: backendMsg,
+    hint,
+    category: errorCategory(code),
+    retryable: RETRYABLE_CODES.has(code),
+    fallback_allowed: fallbackAllowed(code, server_type),
+    agent_action: AGENT_ACTIONS[code] || AGENT_ACTIONS.UNKNOWN,
+    ...(Object.keys(context).length ? { context } : {}),
+  };
 }
 
 // ───── MCP 调用（裸 HTTP + JSON-RPC + 响应解析兼容 SSE/纯 JSON）─────
 
-// 万得后端响应有两种形态：
-// (1) 正常调用 → SSE 包装：event: message\ndata: {JSON-RPC}\n\n
-// (2) 限流 / 余额不足 / HTTP 5xx 等 → 纯 JSON：{...JSON-RPC}
 function parseSSE(text) {
   const trimmed = text.trim();
-  // 形态 (2) 优先：纯 JSON
+  // 后端正常返回 SSE，部分错误场景直接返回纯 JSON。
   if (trimmed.startsWith('{')) {
     try { return JSON.parse(trimmed); } catch {}
   }
-  // 形态 (1)：SSE 包装，取最后一行 data: 后的 JSON
   const lines = text.split(/\r?\n/);
   let last = null;
   for (const line of lines) {
@@ -401,7 +467,6 @@ function parseSSE(text) {
   throw new Error(`响应格式无法识别（既非 SSE 也非纯 JSON）。原文前 200 字符：${text.slice(0, 200)}`);
 }
 
-// HTTP 状态码 → 错误码 + 提示
 const HTTP_ERROR_MAP = {
   401: ['KEY_INVALID',          'API Key 无效或过期 → 开发者中心重新生成'],
   403: ['KEY_FORBIDDEN_SERVER', 'API Key 权限不足或该 server 未订阅 → 开发者中心确认'],
@@ -437,7 +502,6 @@ async function mcpRequest(server_type, method, params, { timeoutMs = 60_000 } = 
     });
   }
 
-  // ───── HTTP 层错误检测 ─────
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '');
     const [code, hint] = HTTP_ERROR_MAP[resp.status] || ['UNKNOWN', '检查参数构造'];
@@ -445,7 +509,6 @@ async function mcpRequest(server_type, method, params, { timeoutMs = 60_000 } = 
     die(code, detail, { server_type, apiKey, extraHint: hint });
   }
 
-  // ───── 响应解析（兼容 SSE / 纯 JSON）─────
   const text = await resp.text();
   let payload;
   try {
@@ -457,32 +520,26 @@ async function mcpRequest(server_type, method, params, { timeoutMs = 60_000 } = 
     });
   }
 
-  // ───── JSON-RPC 协议层错误 ─────
   if (payload.error) {
     const msg = payload.error.message || JSON.stringify(payload.error);
     die('MCP_PROTOCOL_ERROR', msg, { server_type, apiKey });
   }
 
-  // ───── MCP 工具层错误（result.isError = true）─────
-  // 限流 / 余额不足 / 部分协议错误走这条路径
   if (payload.result?.isError) {
     const msg = payload.result.content?.[0]?.text || JSON.stringify(payload.result);
     die(inferErrorCode(msg), msg, { server_type, apiKey });
   }
 
-  // ───── 工具内业务错误（content[0].text 内嵌 JSON 含 mcp_tool_error_code 或 error.code）─────
-  // 万得后端在 economic_data 等场景把 bug 包在嵌套 JSON 里；ok 状态会误导
+  // 部分工具把业务错误包在 content[0].text 的 JSON 字符串里，必须二次解析。
   const innerText = payload.result?.content?.[0]?.text;
   if (typeof innerText === 'string') {
     let inner;
     try { inner = JSON.parse(innerText); } catch { inner = null; }
     if (inner) {
-      // 万得专属：mcp_tool_error_code 非 0
       if (typeof inner.mcp_tool_error_code === 'number' && inner.mcp_tool_error_code !== 0) {
         const msg = inner.mcp_tool_error_msg || JSON.stringify(inner);
         die(inferErrorCode(msg), msg, { server_type, apiKey });
       }
-      // 通用：含 error.code（如 NO_RESULTS）
       if (inner.error && (inner.error.code || inner.error.message)) {
         const errCode = inner.error.code || '';
         const errMsg = inner.error.message || '';
@@ -512,15 +569,7 @@ async function cmdCall(server_type, toolName, paramsJson) {
     exitWithUsage(
       `用法：call <server_type> <tool_name> '<params_json>'\n` +
       `可用 server_type: ${Object.keys(SERVERS).join(' / ')}\n` +
-      `例：\n` +
-      `  call analytics_data get_financial_data '{"question":"查询中国A股市场过去一年的平均成交量"}'\n` +
-      `  call stock_data get_stock_basicinfo '{"question":"600519.SH 公司基本档案"}'\n` +
-      `  call global_stock_data get_global_stock_basicinfo '{"question":"AAPL.O 公司基本档案"}'\n` +
-      `  call index_data get_index_basicinfo '{"question":"沪深300 指数档案"}'\n` +
-      `  call bond_data get_bond_market_data '{"question":"国债 2601 行情"}'\n` +
-      `  call fund_data get_fund_info '{"question":"005827.OF 基金档案"}'\n` +
-      `  call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":3}'\n` +
-      `  call economic_data get_economic_data '{"metricIdsStr":"中国GDP"}'`,
+      `典型：\n  ${CALL_EXAMPLES.join('\n  ')}`,
       1,
     );
   }
@@ -532,14 +581,17 @@ async function cmdCall(server_type, toolName, paramsJson) {
     args = JSON.parse(paramsJson);
   } catch (e) {
     die('INVALID_PARAMS_JSON', `params JSON 解析失败：${e.message} | 原文：${paramsJson.slice(0, 200)}`);
-    // extraHint 不传，使用 ERROR_PATTERNS 默认 hint（含 shell 转义建议）
   }
 
   const result = await mcpInitializeAndCall(server_type, 'tools/call', {
     name: toolName,
     arguments: args,
   });
-  console.log(JSON.stringify({ ok: true, server_type, tool: toolName, ...result }, null, 2));
+  return {
+    server_type,
+    tool: toolName,
+    result,
+  };
 }
 
 async function cmdSetupKey(...rawArgs) {
@@ -548,10 +600,7 @@ async function cmdSetupKey(...rawArgs) {
   if (!key || key.startsWith('--')) {
     exitWithUsage(
       `用法：cli.mjs setup-key <KEY> --scope <global|skill>\n\n` +
-      `⚠️ AI 注意：调本命令前必须先用 AskUserQuestion 让用户在以下两项里选一个：\n` +
-      `  A. 全局共享【推荐 — 所有 wind skill 共用】 → --scope global\n` +
-      `  B. 仅当前 skill                              → --scope skill\n` +
-      `不要替用户挑默认值。`,
+      `scope: global=全局共享；skill=仅当前 skill。调用前先让用户选择。`,
       1,
     );
   }
@@ -566,46 +615,47 @@ async function cmdSetupKey(...rawArgs) {
   if (!scope) {
     exitWithUsage(
       `setup-key 缺 --scope 参数。\n\n` +
-      `⚠️ AI 注意：必须先用 AskUserQuestion 让用户选，不要替用户挑默认：\n` +
-      `  A. 全局共享【推荐 — 所有 wind skill 共用】 → 重试: cli.mjs setup-key ${maskKey(key)} --scope global\n` +
-      `  B. 仅当前 skill                              → 重试: cli.mjs setup-key ${maskKey(key)} --scope skill`,
+      `先让用户选择 global 或 skill，再重试：cli.mjs setup-key ${maskKey(key)} --scope <global|skill>`,
       1,
     );
   }
 
-  if (scope === 'global') {
-    const dir = join(homedir(), '.wind-aimarket');
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const file = join(dir, 'config');
-    let lines = [];
-    if (existsSync(file)) {
-      lines = readFileSync(file, 'utf8').split('\n')
-        .filter(l => l.length > 0 && !/^\s*(export\s+)?WIND_API_KEY\s*=/.test(l));
+  if (!['global', 'skill'].includes(scope)) {
+    die('UNKNOWN_SCOPE', `setup-key 未知 scope: ${scope}`, {
+      extraHint: '可选值: global / skill',
+    });
+  }
+
+  let file;
+  try {
+    if (scope === 'global') {
+      const dir = join(homedir(), '.wind-aimarket');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      file = join(dir, 'config');
+      let lines = [];
+      if (existsSync(file)) {
+        lines = readFileSync(file, 'utf8').split('\n')
+          .filter(l => l.length > 0 && !/^\s*(export\s+)?WIND_API_KEY\s*=/.test(l));
+      }
+      lines.push(`WIND_API_KEY=${key}`);
+      writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
+    } else {
+      file = join(SKILL_DIR, 'config.json');
+      writeFileSync(file, JSON.stringify({ wind_api_key: key }, null, 2) + '\n', { mode: 0o600 });
     }
-    lines.push(`WIND_API_KEY=${key}`);
-    writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
-    console.log(JSON.stringify({
-      ok: true, action: 'setup-key', scope: 'global', path: file,
-      key_masked: maskKey(key),
-      next: '现在可以重试原 Wind 调用',
-    }, null, 2));
-    return;
+  } catch (err) {
+    die('CONFIG_WRITE_ERROR', `配置写入失败: ${err.message}`, {
+      extraHint: '检查目标路径是否可写，或改用 --scope global/skill 的另一种存放位置。',
+      data: { scope, path: file || null },
+    });
   }
 
-  if (scope === 'skill') {
-    const file = join(SKILL_DIR, 'config.json');
-    writeFileSync(file, JSON.stringify({ wind_api_key: key }, null, 2) + '\n', { mode: 0o600 });
-    console.log(JSON.stringify({
-      ok: true, action: 'setup-key', scope: 'skill', path: file,
-      key_masked: maskKey(key),
-      next: '现在可以重试原 Wind 调用',
-    }, null, 2));
-    return;
-  }
-
-  die('UNKNOWN_SCOPE', `setup-key 未知 scope: ${scope}`, {
-    extraHint: '可选值: global / skill',
-  });
+  return {
+    scope,
+    path: file,
+    key_masked: maskKey(key),
+    next: '现在可以重试原 Wind 调用',
+  };
 }
 
 async function cmdOpenPortal() {
@@ -627,9 +677,7 @@ async function cmdOpenPortal() {
     spawnError = err;
   }
 
-  const result = {
-    ok: !spawnError,
-    action: 'open-portal',
+  const data = {
     url: PORTAL_URL,
     platform,
     spawn_command: `${bin} ${args.join(' ')}`,
@@ -637,10 +685,12 @@ async function cmdOpenPortal() {
     fallback_message: `如果浏览器没有自动弹出，请手动访问：${PORTAL_URL}`,
   };
   if (spawnError) {
-    result.error = spawnError.message;
-    result.headless_hint = '本地无法启动浏览器（headless / 无 GUI / 命令不存在）。请把 url 字段告知用户，让他在自己设备的浏览器里打开。';
+    die('OPEN_PORTAL_FAILED', `本地无法启动浏览器：${spawnError.message}`, {
+      data,
+      extraHint: '请把 data.url 告知用户，让他在自己设备的浏览器里打开。',
+    });
   }
-  console.log(JSON.stringify(result, null, 2));
+  return data;
 }
 
 // ───── 主入口 ─────
@@ -657,13 +707,7 @@ const USAGE =
   `可用 server_type:\n` +
   Object.entries(SERVERS).map(([k, v]) => `  ${k.padEnd(20)}${v.label}`).join('\n') + '\n\n' +
   `典型:\n` +
-  `  cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH 公司基本档案"}'   # NL 类\n` +
-  `  cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅"}'   # 行情类(中文指标名)\n` +
-  `  cli.mjs call fund_data get_fund_kline '{"windcode":"588200.SH","begin_date":"20260401","end_date":"20260430"}'   # 基金 K 线(必传 begin_date)\n` +
-  `  cli.mjs call global_stock_data get_global_stock_quote '{"windcode":"AAPL.O"}'   # 美股分钟级\n` +
-  `  cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"20260401","end_date":"20260430"}'   # 指数 K 线\n` +
-  `  cli.mjs call bond_data get_bond_basicinfo '{"question":"国债 2601 基本信息"}'   # 债券档案\n` +
-  `  cli.mjs call analytics_data get_financial_data '{"question":"查询中国A股市场过去一年的平均成交量"}'`;
+  `  ${CALL_EXAMPLES.join('\n  ')}`;
 
 const commands = {
   call: () => cmdCall(args[0], args[1], args[2]),
@@ -671,19 +715,32 @@ const commands = {
   'setup-key': () => cmdSetupKey(...args),
 };
 
-if (!cmd || !commands[cmd]) {
-  process.stderr.write(USAGE + '\n');
-  process.exit(cmd ? 1 : 0);
+if (!cmd) {
+  activeCommand = 'help';
+  writeEnvelope({ ok: true, command: 'help', data: { usage: USAGE } });
+  process.exit(0);
 }
 
-// 仅对实际调用类命令触发探活(open-portal 类管理命令跳过)
+activeCommand = cmd;
+
+if (!commands[cmd]) {
+  writeEnvelope({
+    ok: false,
+    command: cmd,
+    data: { usage: USAGE },
+    error: buildErrorObject('USAGE_ERROR', `未知命令: ${cmd}`, { extraHint: '按 data.usage 选择可用命令后重试。' }),
+  });
+  process.exit(1);
+}
+
 if (cmd === 'call') {
   spawnUpdateCheck();
 }
 
 commands[cmd]()
-  .then(() => {
-    if (cmd === 'call') maybePrintUpdateNotice();
+  .then((data) => {
+    const notices = cmd === 'call' ? collectUpdateNotices() : [];
+    writeEnvelope({ ok: true, command: cmd, data, notices });
   })
   .catch((err) => {
     die('UNKNOWN', `执行失败：${err.message || err}`, {

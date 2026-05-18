@@ -153,7 +153,7 @@ export const KNOWN_SKILLS = [
   },
   {
     nameZh: "可比公司分析",
-    nameEn: "fsi-comps-analysis",
+    nameEn: "Comps Analysis",
     descZh:
       "构建机构级可比公司分析（Comps Analysis），以 Excel 表格 + 文字分析报告输出：覆盖经营指标、估值倍数对比、统计基准分析。触发词：comps analysis / comparable companies / peer analysis / relative valuation / valuation multiples / EV/EBITDA comps / peer benchmark / trading comps。",
     descEn:

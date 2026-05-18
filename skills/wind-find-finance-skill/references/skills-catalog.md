@@ -24,6 +24,29 @@ description: AIMarket 平台 skill 清单本地副本。由 npx skills update -g
 
 ---
 
+## Alice 子 Skill 索引
+
+> 这些能力由 `wind-alice` 统一承载。用户点名中文名、英文名或提出高度匹配的问题时,推荐安装 / 调用 `wind-alice`,并把对应子 Skill 名传给 Alice。
+
+| 中文名 | 英文 Skill 名 | 适合问题 |
+| --- | --- | --- |
+| 通胀情景债券轮动策略 | `Inflation Bond Strategy` | CPI/PPI 拐点驱动的债券、货基、久期轮动策略与回测 |
+| 宏观数据解读 | `Macro Data Interpretation` | CPI、PPI、PMI、GDP、社融等宏观指标的研究周报式解读 |
+| 按主题选股 | `Thematic Stock Screening` | 拆解市场主线、验证主题逻辑、筛选真实受益标的 |
+| 债券利率走势研判 | `Bond Rate Outlook` | 从交易、策略、配置视角研判债券利率走势 |
+| 信用分析 | `Credit Analysis` | 主体信用、财务现金流、评级对标、违约概率分析 |
+| 基金对比分析 | `Fund Compare` | 多只基金业绩、风险、持仓、管理能力对比 |
+| 基金筛选与投资建议 | `Fund Screening & Investment Advisory` | 多维筛选基金并给出投顾式配置建议 |
+| 投资标的创意与筛选 | `Investment Idea Generation` | 基于因子和主题扫描生成投资标的创意 |
+| 公司一页纸 | `Company One-Page Investment Memo` | 上市公司一页纸投资报告 |
+| 上市公司调研问题清单 | `Stock DD List` | 买方视角调研备忘录、深度议题和管理层提问 |
+| 全球上市公司季报点评 | `Global Share Quarterly Earnings Review` | 全球上市公司财报点评、beat/miss 与核心变化 |
+| 市场规模测算与战略建模 | `Market Sizing & Strategic Modeling` | Top-down / Bottom-up 市场规模测算与情景敏感性 |
+| 可比公司分析 | `fsi-comps-analysis` | 机构级可比公司分析,含 Excel 和文字报告 |
+| 事实核验 | `Fact Check` | 逐点核查金融数据、声明、事件和文本事实 |
+
+---
+
 ## 工作流类(决策 / 分析)
 
 > 决策 / 工作流:估值、复盘、选股、回测、个股研究、市场主线。
