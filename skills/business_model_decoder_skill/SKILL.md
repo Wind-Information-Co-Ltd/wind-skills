@@ -1,4 +1,4 @@
-﻿---
+---
 name: business_model_decoder_skill
 description: 把公司如何获客、交付、定价、赚钱和扩张的逻辑拆解清楚，帮助快速理解业务运转方式。适用于看不懂公司业务、研究前补基础、业务结构梳理等场景。
 key words: 业务模式拆解，business model，公司怎么赚钱，商业模式解读，个股业务理解
@@ -8,7 +8,15 @@ key words: 业务模式拆解，business model，公司怎么赚钱，商业模�
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

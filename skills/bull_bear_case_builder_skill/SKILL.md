@@ -1,4 +1,4 @@
-﻿---
+---
 name: bull_bear_case_builder_skill
 description: 同时搭建看多与看空逻辑，比较证据强弱、关键变量与情景路径，帮助识别核心分歧。适用于防止确认偏误、研究前辩论、投资观点校验等场景。
 key words: 多空论证，bull bear case，投资分歧，观点对照，防确认偏误
@@ -8,7 +8,15 @@ key words: 多空论证，bull bear case，投资分歧，观点对照，防确�
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

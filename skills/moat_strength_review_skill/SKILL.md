@@ -1,4 +1,4 @@
-﻿---
+---
 name: moat_strength_review_skill
 description: 评估公司竞争优势的来源、强度、可持续性与削弱风险，判断护城河是否真实存在并能转化为回报。适用于长线票初筛、优质公司研究、竞争壁垒判断等场景。
 key words: 护城河评估，moat review，竞争优势，长线票初筛，壁垒判断
@@ -8,7 +8,15 @@ key words: 护城河评估，moat review，竞争优势，长线票初筛，壁�
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

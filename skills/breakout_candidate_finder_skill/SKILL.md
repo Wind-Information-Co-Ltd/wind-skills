@@ -1,4 +1,4 @@
-﻿---
+---
 name: breakout_candidate_finder_skill
 description: 批量识别突破形态成熟、量价结构健康、催化配合较好的候选股，并输出优先级、触发条件与失效边界。适用于短中线选股、盘前候选池整理、板块轮动中筛选领涨预备股等场景。
 key words: 突破候选，breakout，短中线选股，形态突破，候选池
@@ -8,7 +8,15 @@ key words: 突破候选，breakout，短中线选股，形态突破，候选池
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

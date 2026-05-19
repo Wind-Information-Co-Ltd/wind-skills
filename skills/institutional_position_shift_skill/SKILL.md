@@ -1,4 +1,4 @@
-﻿---
+---
 name: institutional_position_shift_skill
 description: 识别机构持仓变化、共识强化与调仓方向，帮助判断哪些公司或行业正在被增配、减配或重新定价。适用于13F、基金季报、机构持仓复盘与风格验证。
 key words: 机构持仓，position shift，13F，基金季报，调仓方向
@@ -8,7 +8,15 @@ key words: 机构持仓，position shift，13F，基金季报，调仓方向
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

@@ -1,4 +1,4 @@
-﻿---
+---
 name: peer_comparison_decision_skill
 description: 横向比较同业候选公司的业务质量、增长、盈利、估值与催化差异，并给出相对强弱结论。适用于候选股二选一、行业内优中选优、建立优先跟踪顺序等场景。
 key words: 同业比选，peer comparison，候选股对比，二选一，相对强弱
@@ -8,7 +8,15 @@ key words: 同业比选，peer comparison，候选股对比，二选一，相对
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

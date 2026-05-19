@@ -1,4 +1,4 @@
-﻿---
+---
 name: high_quality_compounder_finder_skill
 description: 筛选具备高资本回报、稳定护城河、长期复利潜力与较强盈利质量的核心候选股，并输出优先级、估值纪律与持续跟踪重点。适用于长线核心仓选股、复利资产池建设、高质量公司比较等场景。
 key words: 高质复利，compounder，长牛股，高ROE，核心仓
@@ -8,7 +8,15 @@ key words: 高质复利，compounder，长牛股，高ROE，核心仓
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

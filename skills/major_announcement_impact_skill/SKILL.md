@@ -1,4 +1,4 @@
-﻿---
+---
 name: major_announcement_impact_skill
 description: 分析并购、减持、定增、重大合同等公告的影响路径、受益受损方与后续风险。适用于突发公告解读、盘后复盘、事件驱动判断等场景。
 key words: 公告影响，major announcement，并购公告，定增解读，重大事项影响
@@ -8,7 +8,15 @@ key words: 公告影响，major announcement，并购公告，定增解读，重
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

@@ -1,4 +1,4 @@
-﻿---
+---
 name: pullback_opportunity_finder_skill
 description: 寻找回调充分但趋势未被破坏、承接结构尚可的候选股，并输出观察区间、反转信号与失效条件。适用于低吸机会筛选、强势股二次上车、趋势股回踩观察等场景。
 key words: 回调机会，pullback，低吸筛选，回踩买点，趋势修复
@@ -8,7 +8,15 @@ key words: 回调机会，pullback，低吸筛选，回踩买点，趋势修复
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

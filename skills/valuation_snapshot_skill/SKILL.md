@@ -1,4 +1,4 @@
-﻿---
+---
 name: valuation_snapshot_skill
 description: 快速判断个股当前估值的高低、历史分位、同业相对位置与重估条件。适用于先判断“贵不贵”、估值位置筛查、讨论赔率与预期要求等场景。
 key words: 估值快照，valuation snapshot，贵不贵，分位判断，估值位置
@@ -8,7 +8,15 @@ key words: 估值快照，valuation snapshot，贵不贵，分位判断，估值
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

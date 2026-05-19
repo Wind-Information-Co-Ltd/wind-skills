@@ -1,4 +1,4 @@
-﻿---
+---
 name: conference_call_takeaway_skill
 description: 提炼业绩会中的新信息、管理层语气变化、问答焦点与潜在警讯。适用于听完业绩会、阅读纪要后快速更新观点等场景。
 key words: 业绩会提炼，conference call，业绩会纪要，管理层表态，财报电话会
@@ -8,7 +8,15 @@ key words: 业绩会提炼，conference call，业绩会纪要，管理层表态
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位

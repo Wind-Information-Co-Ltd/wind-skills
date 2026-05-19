@@ -1,4 +1,4 @@
-﻿---
+---
 name: stop_loss_discipline_skill
 description: 为单笔交易设计价格止损、逻辑止损与时间止损规则，并给出触发后的执行动作与复核顺序。适用于下单前纪律设定、持仓修正与减少犹豫止损场景。
 key words: 止损纪律，stop loss，风控，退出规则，交易纪律
@@ -8,7 +8,15 @@ key words: 止损纪律，stop loss，风控，退出规则，交易纪律
 
 ## 数据依赖与执行前置条件
 
-本技能依赖 Wind 数据底座。分析前需先通过 `wind-mcp-skill` 获取相关数据。
+推荐使用万得 `wind-mcp-skill` 获取底层数据。执行前先检查本地是否已有 `wind-mcp-skill`；若没有，提示用户安装：
+
+```bash
+# GitHub
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+
+# Gitee 镜像（国内）
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
 
 
 ## 技能定位
