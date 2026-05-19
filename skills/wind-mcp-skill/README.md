@@ -39,7 +39,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 ## API Key
 
-需要 `WIND_API_KEY`（登录 [aimarket.wind.com.cn 开发者中心](https://aimarket.wind.com.cn/#/user/overview) 获取）。
+需要 `WIND_API_KEY`（登录 [Wind金融AI市场](https://aifinmarket.wind.com.cn/#/user/overview) 获取）。
 
 装好后向 AI 提一个 wind 数据问题，AI 会按 stdout JSON envelope 里的 `error.agent_action` / `error.hint` 引导完成 Key 配置——无需手动管路径。也可以在本 skill 目录下运行：
 

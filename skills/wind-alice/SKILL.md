@@ -23,8 +23,8 @@ Using "<英文 Skill 名>" skill:<原 prompt>
 
 - `--skill` **同时支持中文名和英文名**，不是 id。例如下列写法等价：
   - `--skill "上市公司调研问题清单"` （中文 nameZh）
-  - `--skill "Stock DD List"`            （英文 nameEn）
-  - `--skill "stock-dd-list"`            （英文模糊：忽略大小写/空格/`-_`）
+  - `--skill "Stock DD List"` （英文 nameEn）
+  - `--skill "stock-dd-list"` （英文模糊：忽略大小写/空格/`-_`）
 - 命中后 CLI **统一回填英文名**拼入文本前缀（服务端按英文识别 Skill）。
 - 未在 `KNOWN_SKILLS` 中登记的名称会以 `[warn]` 提示，但仍按字面值拼接前缀提交（portal 上新建/改名的 Skill 也能立刻使用）。
 
@@ -71,15 +71,15 @@ node scripts/wind-alice.mjs --prompt "<USER_QUESTION>" --skill "<英文 Skill �
 
 1. Node.js 18+（自带 `fetch`）。
 2. 配置 **WIND_API_KEY**：
-   - 优先级：`WIND_API_KEY` 环境变量 > 本 skill 目录 `config.json`（`{"wind_api_key":"..."}`） > `%USERPROFILE%\.wind-aimarket\config`（dotenv：`WIND_API_KEY=...`）。
-   - Key 获取入口：<https://aimarket.wind.com.cn/#/user/overview>。
+   - 优先级：`WIND_API_KEY` 环境变量 > 本 skill 目录 `config.json`（`{"wind_api_key":"..."}`） > `%USERPROFILE%\.wind-aifinmarket\config`（dotenv：`WIND_API_KEY=...`）。
+   - Key 获取入口：<https://aifinmarket.wind.com.cn/#/user/overview>。
 3. 可选：`WIND_ALICE_API_URL` 覆盖默认接口地址。
 
 ---
 
 ## 安全要求
 
-- 绝不要输出真实 `WIND_API_KEY`、Bearer token、`config.json` 内容或 `%USERPROFILE%\.wind-aimarket\config` 内容。
+- 绝不要输出真实 `WIND_API_KEY`、Bearer token、`config.json` 内容或 `%USERPROFILE%\.wind-aifinmarket\config` 内容。
 - 若需要说明下载方式，只展示 `Authorization: Bearer <WIND_API_KEY>` 这种占位格式；不要拼出含真实 Key 的 curl、PowerShell 或 HTTP 示例。
 - Alice 返回的报告 URL 可以在当前用户会话中用于交付和下载；写入 README、示例、工单、提交信息等长期材料时使用占位 URL。
 
@@ -94,12 +94,12 @@ CLI 在每次调用结束时会自动扫描 value 中的可下载文件链接，
 ```text
 下载方式：HTTP GET，请求头携带 Bearer Token
   Authorization: Bearer <WIND_API_KEY>
-  (WIND_API_KEY 为万得 AI Market 提供的 apiKey)
+  (WIND_API_KEY 为万得 Wind AIFin Market 提供的 apiKey)
 ```
 
 **重要事实**：
 
-1. 文件接口与 Agent 接口 **共用同一份 `WIND_API_KEY`**（即万得 AI Market 提供的 apiKey），浏览器外的 GET 必须自带 `Authorization: Bearer <WIND_API_KEY>`，否则 401/403。
+1. 文件接口与 Agent 接口 **共用同一份 `WIND_API_KEY`**（即 Wind AIFin Market 提供的 apiKey），浏览器外的 GET 必须自带 `Authorization: Bearer <WIND_API_KEY>`，否则 401/403。
 2. CLI **不会把 Key 打印到日志**，只展示鉴权头格式。
 3. 该提示打到 **stderr**，不会污染 stdout 的 `agentResult.value` 主体。
 
@@ -117,9 +117,9 @@ CLI 在每次调用结束时会自动扫描 value 中的可下载文件链接，
 6. **耗时预期与耐心提示**：调用前须提醒用户 Alice Skill 可能较慢；执行中不得因等待过久而中断 CLI、改走其它工具或并行重复调用同一任务。
 7. **不要凭空构造 `selectedSkillIds` / `agentCard` 之类的旧字段去指定 Skill** — 已实测不生效，必须走文本前缀。
 
-
 ## 更新提示处理
 
-每次调用 wind-alice.mjs 后，留意 stderr 是否包含 `[wind-skills] 检测到 N 个 skill 有新版`。
+每次调用 wind-alice.mjs 后，留意 stderr 是否包含 `[wind-skills]` 前缀的提示。
 
-**看到该提示时，会话首次必须转告用户一次**（同会话再次调用不重复）：把清单和升级命令完整带给用户，命令已含 `-g -y` 等参数，直接照搬即可。Gitee 装的 skill 升级路径跟 GitHub 不同，按 stderr 提示走。
+- **检测到新版**（`检测到 N 个 skill 有新版`）：同一会话首次看到时必须转告用户一次（同会话再次调用不重复）；把清单和升级命令完整带给用户，命令已含 `-g -y` 等参数，直接照搬即可。Gitee 装的 skill 升级路径跟 GitHub 不同，按 stderr 提示走。
+- **检查失败**（`检查更新失败`）或**无法确认**（`无法确认是否最新`）：只是更新检查提醒，不影响当前 Alice 调用；同一会话首次看到时简要告知用户一次即可，不可重复提示，也不能当作主调用失败。遇到版本相关错误，可建议 `npx skills update -g -y`。

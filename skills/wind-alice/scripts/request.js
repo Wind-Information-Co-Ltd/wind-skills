@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_API_URL = "https://alice.wind.com.cn/Weaver/ChatAgent";
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url))); // .../wind-alice
-const WIND_AIMARKET_PORTAL = "https://aimarket.wind.com.cn";
+const WIND_AIFINMARKET_PORTAL = "https://aifinmarket.wind.com.cn";
 
 /**
  * 体验账户当日额度耗尽时，服务端会通过 status-update / UIState 里的
@@ -279,23 +279,23 @@ function getApiKey() {
     try {
       const cfg = JSON.parse(readFileSync(localConfig, "utf8"));
       if (cfg.wind_api_key) return cfg.wind_api_key;
-    } catch {}
+    } catch { }
   }
 
   // 全局 Key 存储位置（与其它 wind 技能可共用）
-  const globalConfig = join(homedir(), ".wind-aimarket", "config");
+  const globalConfig = join(homedir(), ".wind-aifinmarket", "config");
   if (existsSync(globalConfig)) {
     try {
       const env = parseDotenv(readFileSync(globalConfig, "utf8"));
       if (env.WIND_API_KEY) return env.WIND_API_KEY;
-    } catch {}
+    } catch { }
   }
 
   die("KEY_MISSING", "WIND_API_KEY 未配置", {
     extraHint:
-      `① 获取 Key：访问 ${WIND_AIMARKET_PORTAL}（未登录通常会跳转登录页）。\n` +
+      `① 获取 Key：访问 ${WIND_AIFINMARKET_PORTAL}（未登录通常会跳转登录页）。\n` +
       `② 选择 Key 存放位置：\n` +
-      `   A. 全局共享【推荐 — 所有 wind skill 共用】：%USERPROFILE%\\.wind-aimarket\\config\n` +
+      `   A. 全局共享【推荐 — 所有 wind skill 共用】：%USERPROFILE%\\.wind-aifinmarket\\config\n` +
       `      内容：WIND_API_KEY=<KEY>\n` +
       `   B. 仅当前 skill：${join(SKILL_DIR, "config.json")}\n` +
       `      内容：{"wind_api_key":"<KEY>"}\n` +
@@ -462,7 +462,7 @@ function usage() {
     "",
     "Config:",
     `  ${join(SKILL_DIR, "config.json")}   (JSON: {"wind_api_key":"..."})`,
-    `  ${join(homedir(), ".wind-aimarket", "config")}  (dotenv: WIND_API_KEY=...)`,
+    `  ${join(homedir(), ".wind-aifinmarket", "config")}  (dotenv: WIND_API_KEY=...)`,
   ].join("\n");
 }
 
@@ -567,7 +567,7 @@ function deriveFilenameFromUrl(url, fallback) {
     const u = new URL(url);
     const last = u.pathname.split("/").filter(Boolean).pop();
     if (last) return decodeURIComponent(last);
-  } catch {}
+  } catch { }
   return fallback || "downloaded";
 }
 
@@ -646,7 +646,7 @@ function printDownloadHints() {
   lines.push("");
   lines.push("下载方式：HTTP GET，请求头携带 Bearer Token");
   lines.push("  Authorization: Bearer <WIND_API_KEY>");
-  lines.push("  (WIND_API_KEY 为万得 AI Market 提供的 apiKey)");
+  lines.push("  (WIND_API_KEY 为 Wind AIFin Market 提供的 apiKey)");
 
   console.error(lines.join("\n"));
 }
@@ -718,7 +718,7 @@ async function emitParsedEventsUnlessQuotaStreaming(reader, events) {
     return false;
   } catch (e) {
     if (e instanceof WindTrialQuotaExceeded) {
-      await reader.cancel().catch(() => {});
+      await reader.cancel().catch(() => { });
       process.exitCode = 1;
       return true;
     }
@@ -732,9 +732,9 @@ const KEY_MISSING_CODE = -32603;
 function dieKeyMissing() {
   die("KEY_MISSING", "WIND_API_KEY 未配置或已失效", {
     extraHint:
-      `① 获取 Key：访问 ${WIND_AIMARKET_PORTAL}（未登录通常会跳转登录页）。\n` +
+      `① 获取 Key：访问 ${WIND_AIFINMARKET_PORTAL}（未登录通常会跳转登录页）。\n` +
       `② 选择 Key 存放位置：\n` +
-      `   A. 全局共享【推荐 — 所有 wind skill 共用】：%USERPROFILE%\\.wind-aimarket\\config\n` +
+      `   A. 全局共享【推荐 — 所有 wind skill 共用】：%USERPROFILE%\\.wind-aifinmarket\\config\n` +
       `      内容：WIND_API_KEY=<KEY>\n` +
       `   B. 仅当前 skill：${join(SKILL_DIR, "config.json")}\n` +
       `      内容：{"wind_api_key":"<KEY>"}\n` +
@@ -858,85 +858,85 @@ async function main() {
   const MAX_RETRIES = 10;
 
   try {
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const delay = Math.min(1000 * attempt, 10000);
-      console.error(
-        `[reconnect] attempt ${attempt}/${MAX_RETRIES}, waiting ${delay}ms...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-
-    const requestBody =
-      attempt === 0 ? body : resubscribeBody({ params: body });
-
-    let response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestBody),
-      });
-    } catch (e) {
-      console.error(`[network error] ${e.message}`);
-      if (attempt < MAX_RETRIES) continue;
-      console.error("max retries exceeded");
-      process.exitCode = 1;
-      return;
-    }
-
-    console.log("status:", response.status, response.statusText);
-    console.log(
-      "headers:",
-      Object.fromEntries(response.headers.entries()),
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("request failed:");
-      console.error(errorText);
-      if (response.status >= 500 && attempt < MAX_RETRIES) continue;
-      process.exitCode = 1;
-      return;
-    }
-
-    const contentType = (response.headers.get("content-type") || "").toLowerCase();
-    const useSseReader =
-      contentType.includes("text/event-stream") && response.body != null;
-
-    if (useSseReader) {
-      let streamError = null;
-      try {
-        await drainSseStream(response);
-        printDownloadHints();
-        return;
-      } catch (e) {
-        streamError = e;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = Math.min(1000 * attempt, 10000);
+        console.error(
+          `[reconnect] attempt ${attempt}/${MAX_RETRIES}, waiting ${delay}ms...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
-      console.error(`[stream error] ${streamError.message}`);
-      if (attempt < MAX_RETRIES) continue;
-      console.error("max retries exceeded");
-      process.exitCode = 1;
+      const requestBody =
+        attempt === 0 ? body : resubscribeBody({ params: body });
+
+      let response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(requestBody),
+        });
+      } catch (e) {
+        console.error(`[network error] ${e.message}`);
+        if (attempt < MAX_RETRIES) continue;
+        console.error("max retries exceeded");
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log("status:", response.status, response.statusText);
+      console.log(
+        "headers:",
+        Object.fromEntries(response.headers.entries()),
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("request failed:");
+        console.error(errorText);
+        if (response.status >= 500 && attempt < MAX_RETRIES) continue;
+        process.exitCode = 1;
+        return;
+      }
+
+      const contentType = (response.headers.get("content-type") || "").toLowerCase();
+      const useSseReader =
+        contentType.includes("text/event-stream") && response.body != null;
+
+      if (useSseReader) {
+        let streamError = null;
+        try {
+          await drainSseStream(response);
+          printDownloadHints();
+          return;
+        } catch (e) {
+          streamError = e;
+        }
+
+        console.error(`[stream error] ${streamError.message}`);
+        if (attempt < MAX_RETRIES) continue;
+        console.error("max retries exceeded");
+        process.exitCode = 1;
+        return;
+      }
+
+      // 非 SSE：可能是 JSON-RPC error、整包 JSON、HTML、或网关误标的 SSE 文本
+      let bodyText;
+      try {
+        bodyText = await response.text();
+      } catch (e) {
+        console.error(`[read body error] ${e.message}`);
+        if (attempt < MAX_RETRIES) continue;
+        console.error("max retries exceeded");
+        process.exitCode = 1;
+        return;
+      }
+
+      consumeNonStreamBody(bodyText);
+      printDownloadHints();
       return;
     }
-
-    // 非 SSE：可能是 JSON-RPC error、整包 JSON、HTML、或网关误标的 SSE 文本
-    let bodyText;
-    try {
-      bodyText = await response.text();
-    } catch (e) {
-      console.error(`[read body error] ${e.message}`);
-      if (attempt < MAX_RETRIES) continue;
-      console.error("max retries exceeded");
-      process.exitCode = 1;
-      return;
-    }
-
-    consumeNonStreamBody(bodyText);
-    printDownloadHints();
-    return;
-  }
   } finally {
     maybePrintUpdateNotice();
   }

@@ -39,7 +39,7 @@ if (isHelp) {
       "",
       "Config:",
       "  WIND_API_KEY (env), 或 skill 目录 config.json (wind_api_key),",
-      "  或 %USERPROFILE%\\.wind-aimarket\\config (dotenv: WIND_API_KEY=...)",
+      "  或 %USERPROFILE%\\.wind-aifinmarket\\config (dotenv: WIND_API_KEY=...)",
     ].join("\n"),
   );
   process.exitCode = args.length === 0 ? 2 : 0;

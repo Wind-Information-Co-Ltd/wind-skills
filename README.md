@@ -117,7 +117,7 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --list
 node scripts/cli.mjs open-portal
 ```
 
-跨平台自动调浏览器（macOS `open` / Linux `xdg-open` / Windows `start`），打开 `https://aimarket.wind.com.cn/#/user/overview`：
+跨平台自动调浏览器（macOS `open` / Linux `xdg-open` / Windows `start`），打开 `https://aifinmarket.wind.com.cn/#/user/overview`：
 
 - **已登录** → 直接看到个人中心，复制 API Key
 - **未登录** → SPA 自动跳到 `/#/login`，登录后回到 overview 即可
@@ -127,28 +127,28 @@ node scripts/cli.mjs open-portal
 macOS / Linux / Git Bash:
 
 ```bash
-mkdir -p ~/.wind-aimarket && echo "WIND_API_KEY=ak_xxx" > ~/.wind-aimarket/config
+mkdir -p ~/.wind-aifinmarket && echo "WIND_API_KEY=ak_xxx" > ~/.wind-aifinmarket/config
 ```
 
 Windows cmd:
 
 ```bat
-if not exist "%USERPROFILE%\.wind-aimarket" mkdir "%USERPROFILE%\.wind-aimarket"
-echo WIND_API_KEY=ak_xxx > "%USERPROFILE%\.wind-aimarket\config"
+if not exist "%USERPROFILE%\.wind-aifinmarket" mkdir "%USERPROFILE%\.wind-aifinmarket"
+echo WIND_API_KEY=ak_xxx > "%USERPROFILE%\.wind-aifinmarket\config"
 ```
 
 Windows PowerShell:
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.wind-aimarket"
-Set-Content -Path "$env:USERPROFILE\.wind-aimarket\config" -Value "WIND_API_KEY=ak_xxx" -Encoding UTF8
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.wind-aifinmarket"
+Set-Content -Path "$env:USERPROFILE\.wind-aifinmarket\config" -Value "WIND_API_KEY=ak_xxx" -Encoding UTF8
 ```
 
 ### 三级兜底（按优先级）
 
 1. 环境变量 `WIND_API_KEY`
 2. SKILL.md 同目录 `config.json`
-3. 全局 `~/.wind-aimarket/config`（**推荐**，所有 wind skill 共享）
+3. 全局 `~/.wind-aifinmarket/config`（**推荐**，所有 wind skill 共享）
 
 ---
 
@@ -259,4 +259,4 @@ wind-skills/
 
 ## 📝 许可
 
-© Wind AIMarket 2026
+© Wind AIFinMarket 2026

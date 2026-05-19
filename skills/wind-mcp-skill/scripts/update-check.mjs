@@ -1,70 +1,105 @@
 #!/usr/bin/env node
-// update-check.mjs — wind-skills 升级感知探活脚本(lock-driven)
-// 由 cli.mjs 异步 spawn,读 lock 条目 → 用 sourceUrl 解析 host → 调对应 tree API 比对 hash
+// update-check.mjs — 通用 wind-skills 升级感知探活脚本 v2(installedAt-反查方案)
+// 通用版：自动从目录路径检测 skill name，无需硬编码
+// 由各 skill 的 CLI 异步 spawn,读 lock 条目 → 反查"装时刻"的远端 commit → 跟当前远端 tree SHA 对比
 // 设计: 完全静默,绝不阻塞主流程,任何异常吞掉
 //
-// 状态: up_to_date / update_available / unknown / transient_error
-// - lock-driven: 真值来自 lock 条目,不再硬编码 owner 白名单
-// - schema 兼容: v1 project lock(computedHash) + v3 global lock(skillFolderHash)
-// - host 判定: 仅靠 sourceUrl 字符串解析(sourceType 'git' 不能区分 GitHub/Gitee)
+// 与 baseline 方案(v1)的区别:
+//   - v1: 用 baseline 文件存"上次远端 SHA",首次 check 把当下当基准 → "装老版本"漏报
+//   - v2: 不用 baseline,反查 lock.updatedAt 时刻的真实 commit,精确对比
+// 统一缓存: ~/.cache/wind-aifinmarket/update-state.json (schema v3, 多 skill 共享)
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, openSync, closeSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SKILL_NAME = 'wind-mcp-skill';
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const SKILL_NAME = basename(dirname(SCRIPT_DIR));
 
-const CACHE_DIR = join(homedir(), '.cache', 'wind-aimarket');
+const CACHE_DIR = join(homedir(), '.cache', 'wind-aifinmarket');
 const CACHE_FILE = join(CACHE_DIR, 'update-state.json');
-const BASELINE_FILE = join(CACHE_DIR, 'update-baseline.json');
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 
-const TTL_UP_TO_DATE_MS    = 60 * 60 * 1000;        // 60 min
-const TTL_AVAILABLE_MS     = 12 * 60 * 60 * 1000;   // 12 h
-const TTL_UNKNOWN_MS       = 24 * 60 * 60 * 1000;   // 24 h(配置类问题,下次大概率仍 unknown)
-const TTL_TRANSIENT_MS     =  5 * 60 * 1000;       //  5 min(网络抖,下次重试)
+const TTL_UP_TO_DATE_MS    = 60 * 60 * 1000;
+const TTL_AVAILABLE_MS     = 12 * 60 * 60 * 1000;
+const TTL_UNKNOWN_MS       = 24 * 60 * 60 * 1000;
+const TTL_TRANSIENT_MS     =  5 * 60 * 1000;
+const TTL_RATE_LIMIT_MS    = 60 * 60 * 1000;
 
 const NETWORK_TIMEOUT_MS = 5_000;
+const INSTALLED_AT_TOLERANCE_MS = 60 * 60 * 1000;
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+// ───── 统一缓存读写 ─────
 
-// ───── cache ─────
+const LEGACY_CACHE_FILES = [
+  'wind-find-update-state.json',
+  'wind-find-update-baseline.json',
+  'update-baseline.json',  // v1 baseline 残留(v2 反查方案不再使用)
+];
 
-function readCache() {
-  if (!existsSync(CACHE_FILE)) return null;
+function readUnifiedCache() {
+  if (!existsSync(CACHE_FILE)) return { schemaVersion: CACHE_SCHEMA_VERSION, skills: {} };
   try {
     const data = JSON.parse(readFileSync(CACHE_FILE, 'utf8'));
-    if (data?.schemaVersion !== CACHE_SCHEMA_VERSION) return null;
+    if (data?.schemaVersion !== CACHE_SCHEMA_VERSION || !data.skills) {
+      return { schemaVersion: CACHE_SCHEMA_VERSION, skills: {} };
+    }
     return data;
-  } catch { return null; }
+  } catch { return { schemaVersion: CACHE_SCHEMA_VERSION, skills: {} }; }
 }
 
-function writeCache(state) {
-  try {
-    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-    const prev = readCache();
-    const merged = { ...state, schemaVersion: CACHE_SCHEMA_VERSION, lastCheck: new Date().toISOString() };
+// 文件锁: O_EXCL 创建 lockfile,陈旧锁(>30s)自动清理。拿不到锁等 100ms 重试,5 次后放弃(不阻塞)。
+const LOCK_FILE = CACHE_FILE + '.lock';
+const LOCK_STALE_MS = 30_000;
+const LOCK_RETRY_DELAY_MS = 100;
+const LOCK_MAX_RETRIES = 5;
+
+async function withLock(fn) {
+  for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
+    try {
+      if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+      // 陈旧锁清理(上次进程崩了没清)
+      try {
+        const st = statSync(LOCK_FILE);
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) unlinkSync(LOCK_FILE);
+      } catch {}
+      // O_EXCL 独占创建
+      const fd = openSync(LOCK_FILE, 'wx');
+      try {
+        return fn();
+      } finally {
+        try { closeSync(fd); } catch {}
+        try { unlinkSync(LOCK_FILE); } catch {}
+      }
+    } catch (e) {
+      if (e?.code !== 'EEXIST') return;  // 非"已存在"的错(权限/磁盘),直接放弃
+      await new Promise(r => setTimeout(r, LOCK_RETRY_DELAY_MS));
+    }
+  }
+  // 拿不到锁就放弃,绝不阻塞主流程
+}
+
+async function writeUnifiedCacheSkill(skillState) {
+  await withLock(() => {
+    const full = readUnifiedCache();
+    const prev = full.skills[SKILL_NAME];
+    const merged = { ...skillState, lastCheck: new Date().toISOString() };
     if (prev?.snoozedUntil) merged.snoozedUntil = prev.snoozedUntil;
     if (typeof prev?.snoozeLevel === 'number') merged.snoozeLevel = prev.snoozeLevel;
-    writeFileSync(CACHE_FILE, JSON.stringify(merged, null, 2));
-  } catch {}
+    full.skills[SKILL_NAME] = merged;
+    writeFileSync(CACHE_FILE, JSON.stringify(full, null, 2));
+  });
 }
 
-function readBaseline() {
-  if (!existsSync(BASELINE_FILE)) return {};
-  try {
-    const data = JSON.parse(readFileSync(BASELINE_FILE, 'utf8'));
-    return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
-  } catch { return {}; }
+function cleanupLegacyFiles() {
+  for (const name of LEGACY_CACHE_FILES) {
+    const p = join(CACHE_DIR, name);
+    try { if (existsSync(p)) unlinkSync(p); } catch {}
+  }
 }
 
-function writeBaseline(baseline) {
-  try {
-    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2));
-  } catch {}
-}
+// ───── lock 签名 ─────
 
 function isCacheFresh(cache, currentSignature) {
   if (!cache?.lastCheck || !cache?.ttlMs) return false;
@@ -80,7 +115,7 @@ function buildLockSignature(entries) {
     .join('\n');
 }
 
-// ───── lock 文件探测(4 路径策略)─────
+// ───── lock 文件探测 ─────
 
 function walkUp(startDir) {
   const dirs = [];
@@ -96,27 +131,22 @@ function walkUp(startDir) {
 
 function findLockFiles() {
   const candidates = new Set();
-
-  // ① 全局 lock(XDG 优先,fallback HOME)
   const xdg = process.env.XDG_STATE_HOME;
   candidates.add(xdg
     ? join(xdg, 'skills', '.skill-lock.json')
     : join(homedir(), '.agents', '.skill-lock.json'));
-
-  // ② 从 SCRIPT_DIR 向上找项目 lock
   for (const dir of walkUp(SCRIPT_DIR)) {
     candidates.add(join(dir, 'skills-lock.json'));
   }
-
-  // ③ 从 process.cwd() 向上找项目 lock
-  for (const dir of walkUp(process.cwd())) {
-    candidates.add(join(dir, 'skills-lock.json'));
-  }
-
+  try {
+    const cwd = process.cwd();
+    for (const dir of walkUp(cwd)) {
+      candidates.add(join(dir, 'skills-lock.json'));
+    }
+  } catch {}
   return [...candidates].filter(p => existsSync(p));
 }
 
-// 从所有 lock 里收集名字 = SKILL_NAME 的条目(可能多份 lock 都装了)
 function collectEntries() {
   const found = [];
   for (const lockPath of findLockFiles()) {
@@ -131,101 +161,154 @@ function collectEntries() {
 
 // ───── 条目解析 ─────
 
-// 解析 sourceUrl → { host, owner, repo } 或 null
-// 支持: https://github.com/<o>/<r>(.git)?  /  https://gitee.com/<o>/<r>(.git)?
-//      git@github.com:<o>/<r>(.git)?       /  git@gitee.com:<o>/<r>(.git)?
 function parseSourceUrl(sourceUrl) {
   if (typeof sourceUrl !== 'string' || !sourceUrl) return null;
-
   let host = null;
   if (sourceUrl.includes('github.com')) host = 'github';
   else if (sourceUrl.includes('gitee.com')) host = 'gitee';
   else return null;
-
-  // 抓 owner/repo
   const m = sourceUrl.match(/(?:github\.com|gitee\.com)[:/]([^/]+)\/([^/]+?)(?:\.git)?(?:$|[/?#])/);
   if (!m) return null;
   return { host, owner: m[1], repo: m[2] };
 }
 
-// ───── tree API ─────
+function normalizeSkillDir(skillPath) {
+  return String(skillPath || '')
+    .replace(/\\/g, '/')
+    .replace(/\/?SKILL\.md$/i, '')
+    .replace(/\/+$/, '');
+}
+
+// ───── HTTP ─────
 
 async function fetchJson(url) {
   try {
     const resp = await fetch(url, {
-      headers: { 'User-Agent': 'wind-mcp-skill-update-check' },
+      headers: { 'User-Agent': `${SKILL_NAME}-update-check` },
       signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
     });
-    if (!resp.ok) return { error: `http_${resp.status}` };
+    if (!resp.ok) {
+      if (resp.status === 403 || resp.status === 429) {
+        const remaining = resp.headers.get('x-ratelimit-remaining');
+        if (remaining === '0' || resp.status === 429) return { error: 'rate_limit' };
+      }
+      return { error: `http_${resp.status}` };
+    }
     return { data: await resp.json() };
   } catch (e) {
     return { error: e?.name === 'TimeoutError' ? 'timeout' : 'network' };
   }
 }
 
-async function fetchTree({ host, owner, repo }) {
-  if (host === 'github') {
-    const r = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
-    if (r.data && Array.isArray(r.data.tree)) return { tree: r.data };
-    return { error: r.error || 'shape' };
-  }
-  if (host === 'gitee') {
-    // Gitee 默认分支可能是 main 或 master
-    for (const branch of ['main', 'master']) {
-      const r = await fetchJson(`https://gitee.com/api/v5/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`);
-      if (r.data && Array.isArray(r.data.tree)) return { tree: r.data };
-    }
-    return { error: 'shape' };
-  }
-  return { error: 'unsupported_host' };
+// ───── 远端 API ─────
+
+function apiBase(host) {
+  return host === 'github' ? 'https://api.github.com' : 'https://gitee.com/api/v5';
 }
 
-// 把 skillPath 标准化成目录路径,在 tree 里找同名 tree 节点 SHA
-// "skills/X/SKILL.md" / "skills/X/" / "skills/X" 都归一到 "skills/X"
-// "SKILL.md" / "" → 根级 skill,返回整棵 tree 的 SHA
-function findSkillSha(tree, skillPath) {
-  const dir = String(skillPath || '')
-    .replace(/\\/g, '/')
-    .replace(/\/?SKILL\.md$/i, '')
-    .replace(/\/+$/, '');
-  if (!dir) return tree.sha || null;
-  return tree.tree.find(t => t.type === 'tree' && t.path === dir)?.sha || null;
+async function fetchTreeBySha({ host, owner, repo }, sha) {
+  const r = await fetchJson(`${apiBase(host)}/repos/${owner}/${repo}/git/trees/${encodeURIComponent(sha)}?recursive=1`);
+  if (r.error) return { error: r.error };
+  if (r.data && Array.isArray(r.data.tree)) return { tree: r.data };
+  return { error: 'shape' };
 }
 
-// ───── 终态写入 ─────
+async function fetchCurrentTree(parsed, ref) {
+  const branches = ref ? [ref] : (parsed.host === 'gitee' ? ['main', 'master'] : ['HEAD', 'main', 'master']);
+  let lastError = null;
+  for (const branch of branches) {
+    const r = await fetchTreeBySha(parsed, branch);
+    if (r.tree) return r;
+    lastError = r.error;
+    if (r.error === 'rate_limit') return r;
+  }
+  return { error: lastError || 'shape' };
+}
+
+async function fetchCommitAtTime({ host, owner, repo }, ref, skillDir, installedAt) {
+  const until = new Date(new Date(installedAt).getTime() + INSTALLED_AT_TOLERANCE_MS).toISOString();
+  const params = new URLSearchParams({ until, per_page: '1' });
+  if (skillDir) params.set('path', skillDir);
+  if (ref) params.set('sha', ref);
+  const url = `${apiBase(host)}/repos/${owner}/${repo}/commits?${params.toString()}`;
+  const r = await fetchJson(url);
+  if (r.error) return { error: r.error };
+  if (!Array.isArray(r.data) || r.data.length === 0) return { error: 'no_commit_at_time' };
+  const sha = r.data[0]?.sha;
+  if (typeof sha !== 'string') return { error: 'commit_shape' };
+  return { sha };
+}
+
+function findSkillSha(tree, skillDir) {
+  if (!skillDir) return tree.sha || null;
+  return tree.tree.find(t => t.type === 'tree' && t.path === skillDir)?.sha || null;
+}
 
 function shortHash(h) {
   return typeof h === 'string' ? h.slice(0, 7) : '';
 }
 
-// ───── 主逻辑 ─────
+// ───── 通知打印 ─────
 
-async function main() {
-  // Step 1. 收集 entries + 算 lockSignature(用于 cache 失效判定),再判断 cache 是否还新鲜
-  const cache = readCache();
-  const entries = collectEntries();
-  const lockSignature = buildLockSignature(entries);
-  if (isCacheFresh(cache, lockSignature)) return;
+function printNotice(state) {
+  if (state.snoozedUntil && new Date(state.snoozedUntil) > new Date()) return;
 
-  // Step 2. 没装本 skill → unknown
-  if (entries.length === 0) {
-    writeCache({ status: 'unknown', reason: 'lock_missing', ttlMs: TTL_UNKNOWN_MS, lockSignature });
+  if (state.status === 'update_available') {
+    const lines = ['', `[wind-skills] 检测到 ${state.outdated.length} 个 skill 有新版:`];
+    for (const o of state.outdated) {
+      const isGitee = typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com');
+      const upgradeCmd = isGitee
+        ? `npx skills add ${o.sourceUrl} --skill ${o.name} -g -y  # Gitee 源不支持 update,需重装`
+        : `npx skills update ${o.name} -g -y`;
+      lines.push(`  • ${o.name.padEnd(34)} ${o.current || '?'} → ${o.latest}`);
+      lines.push(`    升级: ${upgradeCmd}`);
+    }
+    lines.push('');
+    process.stderr.write(lines.join('\n') + '\n');
     return;
   }
 
-  // Step 3. 对每条 entry 独立判定(理论上只有一条,但 project + global 同装时可能多条)
-  // baseline 策略: 不再拿 lock 的 hash 跟远端比(SHA-256 vs SHA-1,永远不等),
-  // 改为远端 SHA 跟 baseline 自比；lock.updatedAt 变化即视为用户重装/升级,重置 baseline
-  const oldBaseline = readBaseline();
-  const newBaseline = {};
+  if (state.status === 'transient_error') {
+    process.stderr.write(`\n[wind-skills] 检查更新失败,可能是网络问题(reason=${state.reason || 'unknown'})\n\n`);
+    return;
+  }
+
+  if (state.status === 'unknown') {
+    process.stderr.write(`\n[wind-skills] 无法确认是否最新(reason=${state.reason || 'unknown'})\n\n`);
+  }
+}
+
+// ───── 主逻辑 ─────
+
+async function main() {
+  cleanupLegacyFiles();
+
+  const fullCache = readUnifiedCache();
+  const myCache = fullCache.skills[SKILL_NAME] || null;
+  const entries = collectEntries();
+  const lockSignature = buildLockSignature(entries);
+
+  // cache 还新鲜 → 打印缓存中的通知后退出。详细结构化输出由 cli.mjs 走 JSON envelope。
+  if (isCacheFresh(myCache, lockSignature)) {
+    if (myCache) printNotice(myCache);
+    return;
+  }
+
+  if (entries.length === 0) {
+    const state = { status: 'unknown', reason: 'lock_missing', ttlMs: TTL_UNKNOWN_MS, lockSignature };
+    await writeUnifiedCacheSkill(state);
+    printNotice(state);
+    return;
+  }
+
   const outdated = [];
   const unknownDetails = [];
   let transientError = null;
+  let rateLimited = false;
 
   for (const { entry, lockPath } of entries) {
     const sourceUrl = entry.sourceUrl;
     if (!sourceUrl) {
-      // 典型: project lock + Gitee 装(只有 source 短形式 + sourceType='git')
       unknownDetails.push({ reason: 'no_source_url', lockPath, source: entry.source });
       continue;
     }
@@ -236,85 +319,106 @@ async function main() {
       continue;
     }
 
-    const treeResult = await fetchTree(parsed);
-    if (treeResult.error) {
-      // 网络层失败 → 标 transient,但继续看其他 entry(也许另一份 lock 能成)
-      transientError = { reason: treeResult.error, sourceUrl, host: parsed.host };
+    const installedAt = entry.updatedAt || entry.installedAt;
+    if (!installedAt) {
+      unknownDetails.push({ reason: 'no_installed_at', lockPath });
       continue;
     }
 
-    const remoteSha = findSkillSha(treeResult.tree, entry.skillPath);
-    if (!remoteSha) {
+    const skillDir = normalizeSkillDir(entry.skillPath);
+    const ref = entry.ref || null;
+
+    // A: 当前远端 tree
+    const currentTreeResult = await fetchCurrentTree(parsed, ref);
+    if (currentTreeResult.error) {
+      if (currentTreeResult.error === 'rate_limit') { rateLimited = true; break; }
+      transientError = { reason: currentTreeResult.error, sourceUrl, host: parsed.host };
+      continue;
+    }
+
+    const currentSha = findSkillSha(currentTreeResult.tree, skillDir);
+    if (!currentSha) {
       unknownDetails.push({ reason: 'path_missing', lockPath, sourceUrl, skillPath: entry.skillPath });
       continue;
     }
 
-    const lockUpdatedAt = entry.updatedAt || entry.installedAt || null;
-    const key = lockPath;
-    const existing = oldBaseline[key];
-
-    // 情况 1: 没基准 / 用户重装升级了 → 重置基准,不报
-    if (!existing || existing.lockUpdatedAt !== lockUpdatedAt) {
-      newBaseline[key] = { lockUpdatedAt, baselineRemoteSha: remoteSha, sourceUrl };
+    // B: 反查装时刻的 commit → tree
+    const installCommit = await fetchCommitAtTime(parsed, ref, skillDir, installedAt);
+    if (installCommit.error) {
+      if (installCommit.error === 'rate_limit') { rateLimited = true; break; }
+      unknownDetails.push({ reason: `commit_lookup_${installCommit.error}`, lockPath, sourceUrl });
       continue;
     }
 
-    // 情况 2: 基准一致 → up_to_date
-    if (existing.baselineRemoteSha === remoteSha) {
-      newBaseline[key] = existing;
+    const installedTreeResult = await fetchTreeBySha(parsed, installCommit.sha);
+    if (installedTreeResult.error) {
+      if (installedTreeResult.error === 'rate_limit') { rateLimited = true; break; }
+      transientError = { reason: installedTreeResult.error, sourceUrl, host: parsed.host };
       continue;
     }
 
-    // 情况 3: 远端真有新 commit → 报(保留旧 baseline,等用户升级才重置)
-    newBaseline[key] = existing;
+    const installedSha = findSkillSha(installedTreeResult.tree, skillDir);
+    if (!installedSha) {
+      unknownDetails.push({ reason: 'path_missing_at_install', lockPath, sourceUrl });
+      continue;
+    }
+
+    if (currentSha === installedSha) continue;
+
     outdated.push({
       name: SKILL_NAME,
-      current: shortHash(existing.baselineRemoteSha),
-      latest: shortHash(remoteSha),
+      current: shortHash(installedSha),
+      latest: shortHash(currentSha),
       sourceUrl,
       host: parsed.host,
+      installedHash: entry.skillFolderHash || entry.computedHash || null,
     });
   }
 
-  writeBaseline(newBaseline);
+  // ───── 聚合 ─────
 
-  // Step 4. 聚合: outdated 有就 available,否则若全 unknown 走 unknown,否则 up_to_date
-  if (outdated.length > 0) {
-    writeCache({
-      status: 'update_available',
-      outdated,
-      ttlMs: TTL_AVAILABLE_MS,
-      lockSignature,
-    });
+  if (rateLimited) {
+    const state = { status: 'transient_error', reason: 'rate_limit', ttlMs: TTL_RATE_LIMIT_MS, lockSignature };
+    await writeUnifiedCacheSkill(state);
+    printNotice(state);
     return;
   }
 
-  // 没有 outdated。若任何一条成功比对(没进 unknown 也没进 transient)→ up_to_date
+  if (outdated.length > 0) {
+    const state = { status: 'update_available', outdated, ttlMs: TTL_AVAILABLE_MS, lockSignature };
+    await writeUnifiedCacheSkill(state);
+    printNotice(state);
+    return;
+  }
+
   const totalHandled = unknownDetails.length + (transientError ? 1 : 0);
   if (totalHandled < entries.length) {
-    writeCache({ status: 'up_to_date', ttlMs: TTL_UP_TO_DATE_MS, lockSignature });
+    await writeUnifiedCacheSkill({ status: 'up_to_date', ttlMs: TTL_UP_TO_DATE_MS, lockSignature });
     return;
   }
 
-  // 全军覆没 — 优先报 transient(下次还能重试),否则 unknown
   if (transientError) {
-    writeCache({
+    const state = {
       status: 'transient_error',
       reason: transientError.reason,
       sourceUrl: transientError.sourceUrl,
       ttlMs: TTL_TRANSIENT_MS,
       lockSignature,
-    });
+    };
+    await writeUnifiedCacheSkill(state);
+    printNotice(state);
     return;
   }
 
-  writeCache({
+  const state = {
     status: 'unknown',
     reason: unknownDetails[0].reason,
     details: unknownDetails,
     ttlMs: TTL_UNKNOWN_MS,
     lockSignature,
-  });
+  };
+  await writeUnifiedCacheSkill(state);
+  printNotice(state);
 }
 
 main().catch(() => {});
