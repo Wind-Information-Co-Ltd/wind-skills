@@ -70,32 +70,38 @@ examples:
 node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 ```
 
-### CLI JSON 输出契约
+### CLI 输出契约（极简版）
 
-`cli.mjs` 的主输出固定为 **stdout JSON envelope**，不要再从 stderr 解析错误、帮助或更新提示。`scripts/update-check.mjs` 是内部异步探活脚本，不是 Agent 调用入口。
+`cli.mjs` 用 **exit code** 区分成功/失败；不要从 stderr 解析任何东西（stderr 仅做内部日志）。`scripts/update-check.mjs` 是异步探活内部脚本，不是 Agent 调用入口。
 
-1. `ok`：判断主命令成功或失败。
-2. `ok:true` 时读取 `data.result`；业务 JSON 通常在 `data.result.content[0].text` 中。
-3. `ok:false` 时必须读取 `error.code`、`error.retryable`、`error.fallback_allowed`、`error.agent_action`。
-4. `notices` 只是附加提醒，不改变主命令成功/失败判断。
+**成功路径（exit code 0）**：stdout 输出**纯数据**，无任何 envelope 包裹。
+- `call` 命令：**完整透传 MCP `result` 对象**（不做任何 parse / 抽取）。业务数据通常在 `result.content[0].text`，可能是 JSON 字符串，Agent 自行 `JSON.parse` 或按文本处理。
+- `open-portal` / `setup-key` 命令：直接输出结构化 JSON 对象（含 `url` / `path` 等字段）。
+- 无参（help）：直接输出 USAGE 纯文本。
 
-失败处理优先级：
+**失败路径（exit code 非 0）**：stdout 输出 envelope，**只有 `ok` 和 `error` 两个顶层字段**：
 
-1. `error.code`：稳定错误分支。
-2. `error.retryable` / `error.fallback_allowed`：决定是否原样重试、是否允许 fallback。
-3. `error.agent_action`：默认优先遵循的下一步动作。
-4. `error.hint`：错误原因和补充解释，不得单独覆盖 `agent_action`。
-5. `error.context`：候选工具、server、tool 等上下文。
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "KEY_MISSING",
+    "agent_action": "[后端原始诊断] WIND_API_KEY 未配置。立即执行 ..."
+  }
+}
+```
 
-强制错误动作：
+`error.code` 是稳定的错误分类标识符（监控/集成用），`error.agent_action` 是**诊断 + 处方一体的 NL 指令**（agent 自纠用）。两者配合使用：先按 `code` 选分支策略（见下表硬约束），再读 `agent_action` 拿到具体怎么做。
 
-- 若 `error.code == "KEY_MISSING"`，必须立即执行 `node <skill_dir>/scripts/cli.mjs open-portal` 打开开发者中心；不得只把命令或 URL 发给用户。执行后，把返回的 `url` / `flow_note` / `fallback_message` 简短转述给用户，并等待用户提供 Key。
-- 若 `open-portal` 命令本身失败，才允许把 `https://aifinmarket.wind.com.cn/#/user/overview` 作为手动 fallback 发给用户。
-- 用户提供 Key 后，必须询问或沿用用户已明确的存放范围，执行 `node <skill_dir>/scripts/cli.mjs setup-key <KEY> --scope <global|skill>`，然后重试原始数据调用。
+所有"更新检查"相关信号（升级提醒 / 检测失败）**不在 stdout envelope 内**，统一走 **stderr 一次性通道**（见第 8 节）。
 
-`call` 成功时 CLI 只返回一份原始 MCP `data.result`，不再同时返回 `data.parsed`；若 `data.result.content[0].text` 是 JSON 字符串，Agent 自行解析，否则按原始文本处理。
+错误码列表见 `references/error-codes.json`。
 
-错误码字典见 `references/error-codes.json`。
+**强制错误动作**：
+
+- `code == "KEY_MISSING"`：必须立即执行 `node <skill_dir>/scripts/cli.mjs open-portal`；不得只把命令或 URL 发给用户。`open-portal` 成功后从其 stdout JSON 读取 `url` / `flow_note` 转述给用户，等待用户提供 Key。
+- `open-portal` 命令本身失败（`code == "OPEN_PORTAL_FAILED"`）：把 `agent_action` 中嵌入的 URL 发给用户手动打开。
+- 用户给 Key 后，先用 AskUserQuestion 询问或沿用用户已明确的存放范围，执行 `node <skill_dir>/scripts/cli.mjs setup-key <KEY> --scope <global|skill>`，再重试原调用。
 
 > **⚠️ Shell 转义是 `INVALID_PARAMS_JSON` 错误的首要原因。** JSON 第三参数中的双引号和花括号会被不同 shell 差异化处理，必须按当前 shell 类型选择正确写法，否则 JSON 被截断或变形：
 >
@@ -178,7 +184,7 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 
 #### 行情快照工具（4 个 server_type 各 1 个，共 4 个：`get_stock_price_indicators` / `get_global_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`）
 
-获取对应标的一个或多个具体价格指标的最新快照值。需要提供标的代码/名称和指标名称，返回当前值而非时间序列。当用户询问某只股票、基金或指数的当前/最新价格或任何单一时点指标值时，使用此工具。
+获取对应标的指定价格指标的最新值（默认返回当前最新值，非时间序列）。需要提供标的代码/名称和指标名称。当用户询问某只股票、基金或指数的当前/最新价格或任何单一时点指标值时，使用此工具。
 
 | 字段       | 必填 | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -202,7 +208,7 @@ node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
 
 #### 分钟级行情工具（4 个 server_type 各 1 个，共 4 个：`get_stock_quote` / `get_global_stock_quote` / `get_fund_quote` / `get_index_quote`）
 
-获取对应标的在指定日期范围内的分钟级行情时间序列（默认为当日）。每条记录代表一分钟，包含价格、均价、成交量、换手率。当用户需要日内价格走势、逐分钟交易数据或任何日内时间序列数据时，使用此工具。
+获取对应标的在一段时间内的分钟级行情数据（默认为当日）。返回指定日期范围内逐分钟的成交价格、均价、成交量、换手率等。当用户需要日内价格走势、逐分钟交易数据或一段时间内的分钟级行情时，使用此工具。
 
 | 字段       | 必填 | 默认   | 说明                 |
 | ---------- | ---- | ------ | -------------------- |
@@ -396,6 +402,7 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 | 单工具调用**只支持单标的**                                                                                                                   | 逗号分隔多代码后端只识别第 1 个，其余静默忽略                                                                                          |
 | Codex 中调用 Wind 后端联网必须使用 `require_escalated`                                                                                       | 否则沙箱内可能 `fetch failed`                                                                                                          |
 | 结果末尾**必须标注**「数据来源于万得 Wind 金融数据服务」                                                                                     | 合规要求                                                                                                                               |
+| 涉及行业筛选 / 行业分类的问句，用户未明确指定行业体系时，**默认使用万得行业分类**（Wind 行业）                                               | 申万、中信等口径与万得不一致，默认万得保证与后端一致；用户明确要求其他体系时才切换                                                        |
 
 ---
 
@@ -419,24 +426,30 @@ node scripts/cli.mjs call analytics_data get_financial_data '{"question":"查询
 
 ## 7. 出错怎么办
 
-cli.mjs 大部分错误会自动输出结构化 JSON。只解析 stdout，不从 stderr 提取错误信息。常见 schema 类陷阱：
+`cli.mjs` 失败时（exit code != 0）输出 envelope：`{ ok:false, error:{code, agent_action}, notices }`。所有错误信息只解析 stdout，不从 stderr 取。
 
 ### CLI 错误处理硬约束
 
-`cli.mjs` 失败时返回 `ok:false`。默认优先按 `error.agent_action` 处理；如需偏离，必须同时满足以下硬约束，并能明确说明偏离原因：
+**默认行为**：按 `error.agent_action` 文本中的指令执行。`agent_action` 已经把"原始诊断 + 标准处方"合并成一段 NL 文本，agent 读完即可决定下一步，不需要其它字段。
 
-- 不得只参考 `error.hint`、示例命令或经验写法来覆盖 `error.agent_action`。
-- `error.retryable=false` 时禁止原样重试；必须先修改参数、配置、环境，或等待状态变化。
-- `error.fallback_allowed=false` 时禁止改用 `analytics_data`、wind-alice、Web Search 或其它数据源兜底。
-- `INVALID_PARAMS_JSON` 只能修正 JSON 或 shell 转义后重试同一个 `server_type + tool_name`，不得切换工具。
-- `UNKNOWN_TOOL_NAME` 只能从 `error.context.available_tools` 或 `references/tool-manifest.json` 中重选合法工具，不得直接 fallback。
-- Key、权限、限流、余额、网络、后端 5xx 类错误不得换工具绕过；必须修复根因、等待恢复或告知用户。
-- `PARAM_VALIDATION_ERROR` 先按 `## 3. 工具表`、`references/tool-manifest.json`、`references/indicators.md` 修正字段名、必填项、日期格式、枚举值、server_type 和 tool_name。
-- 只有 `error.fallback_allowed=true` 且符合本文路由约束时，才可考虑 `analytics_data`；fallback 前必须把复杂问题拆成简单取数问题，不要机械照搬复杂原话。
-- `analytics_data.get_financial_data` 失败时（非 Key / 权限 / 网络 / 5xx 类错误），可调整 `question` 措辞重试一次（如拆分子问题、换关键词），不得改变用户原始意图。
-- 如果 `analytics_data.get_financial_data` 重试后仍返回未知错误或没找到数据，停止继续 fallback，把后端原文、错误码和已尝试路径简要告知用户，然后执行以下终极兜底：
+**按 `error.code` 选分支策略**：
 
-错误码字典见 `references/error-codes.json`。
+| code | 策略 |
+| --- | --- |
+| `KEY_MISSING` / `KEY_INVALID` / `KEY_FORBIDDEN_SERVER` | 修 Key 根因；**禁止**换工具/换 server 绕过。 |
+| `RATE_LIMIT_DAILY` / `BALANCE_INSUFFICIENT` | 等额度刷新或换 Key；**禁止**换工具绕过。 |
+| `RATE_LIMIT_QPS` / `NETWORK_ERROR` / `SERVER_5XX` | 等 3-5 秒后**原样重试同一请求**。 |
+| `INVALID_PARAMS_JSON` | 只能修 JSON / shell 转义,重试**同一** server_type + tool_name；**禁止**换工具。 |
+| `UNKNOWN_TOOL_NAME` / `UNKNOWN_SERVER_TYPE` | 读 `references/tool-manifest.json` 重选合法 tool/server,**禁止**直接 fallback 到 analytics_data。 |
+| `PARAM_VALIDATION_ERROR` | 按 `## 3. 工具表` + `references/indicators.md` 修字段;多次修正仍不通过且属于结构化取数,可改用 `analytics_data.get_financial_data`,question 须忠实反映用户原始意图。 |
+| `NO_RESULTS` | 调关键词重试;专项无果且属结构化取数可改用 `analytics_data`。 |
+| `RESPONSE_PARSE_ERROR` / `MCP_PROTOCOL_ERROR` / `TOOL_RUNTIME_ERROR` / `UNKNOWN` | 保留原文,能定位本地问题则修正后重试一次,否则告知用户并停止。 |
+
+**禁止跨界 fallback**：Key / 权限 / 限流 / 余额 / 网络 / 5xx 类错误**绝对不能**通过切换 `server_type`、改用 `analytics_data`、切到 wind-alice 或 Web Search 来绕过——这些根因不会因换工具而消失。
+
+**`analytics_data` fallback 前提**：仅在 `PARAM_VALIDATION_ERROR` / `NO_RESULTS` / `UNKNOWN_TOOL_NAME` 等"工具调用/参数/数据覆盖"类错误且已尝试修正后才允许；先把复杂问题拆成简单结构化取数,不要机械照搬复杂原话。`analytics_data` 自身失败（非 Key / 权限 / 网络 / 5xx）可调整 `question` 措辞重试一次,不得改变用户原始意图;再失败则停止 fallback,转入终极兜底（见下）。
+
+错误码完整字典见 `references/error-codes.json`。
 
 ### 终极兜底：wind-alice
 
@@ -476,9 +489,41 @@ cli.mjs 大部分错误会自动输出结构化 JSON。只解析 stdout，不从
 
 ## 8. 保持最新
 
-每次调用 `cli.mjs call` 后，留意 stdout JSON 的 `notices` 数组；更新检查异步写缓存，首次调用不保证立刻出现最新提示。
+更新检查相关的所有信号**都走 stderr 一次性通道**，stdout envelope 完全不携带任何更新检查信号（envelope 只有 `ok` / `error` 两字段）。两类信号独立 sentinel，互不干扰：
 
-- `type="update_available"`：同一会话首次看到时转告用户一次；优先照搬 `items[].upgrade_command`，Gitee / GitHub 升级路径以该字段为准。
-- `type="update_check_failed"` / `type="update_check_unknown"`：只是更新检查提醒，不影响当前 Wind 数据调用；同一会话首次看到时简要告知用户一次即可，不可重复提示，也不能当作主调用失败。
+### 8.1 stderr "检测到新版可用"
 
-⚠️ 如遇"工具不存在 / 字段不符"等疑似版本相关错误，先按本文档工具清单、工具表和 stdout JSON 的 `error.agent_action` / `error.context` 重新检查并重试一次；仍不通过且无 `upgrade_command` 时，再建议 `npx skills update -g -y`。
+成功 call 且本地版本落后远端时，stderr 出现：
+
+```
+[wind-skills] 检测到新版可用:
+  wind-mcp-skill: 439c482 → 586226e
+  升级命令: npx skills update wind-mcp-skill -g -y
+```
+
+升级命令的具体形态由脚本按 **lock 来源**自动决定，**照搬给用户即可**，不要自己改：
+
+- **global 安装**（lock 在 `~/.agents/.skill-lock.json` 或 `$XDG_STATE_HOME/skills/.skill-lock.json`）→ 命令带 `-g`
+- **project 安装**（lock 在 `<项目>/skills-lock.json`）→ 命令**不带** `-g`（带了会去更新/创建全局副本，项目里那份不动）
+- **Gitee 源**（不支持 update）→ 命令变成 `npx skills add <gitee-url> --skill <name> [-g] -y`，按 lock 的 sourceType 自动选 host
+
+### 8.2 stderr "更新检测失败"
+
+后台更新探测异常（网络 / 限流 / lock 缺失等）时，stderr 出现：
+
+```
+[wind-skills] 更新检测失败 (reason=network), 不影响本次调用。
+```
+
+`reason` 可能是 `network` / `rate_limit` / `lock_missing` / `no_source_url` / `timeout` 等。
+
+### 8.3 两类 stderr 通知的统一处理规则
+
+1. **看到就简短转告用户一次**：
+   - 更新可用 → 把升级命令照搬给用户。
+   - 检测失败 → 一句话告知"后台更新检查失败，不影响本次调用"。
+2. **不影响主调用判断**：两种信号与本次 Wind 数据调用的成功 / 失败完全无关，不要用它影响 stdout JSON 的处理逻辑。
+3. **不需要自己去重**：脚本已经保证每个会话每种 stderr 通知只出现一次。stderr 没出现这行字就是没出现，不要去回忆"我之前提过没"。
+4. **stdout 永远不带这两类信号**：envelope 没有 `notices` 字段，只有 `ok` 和 `error`。所有更新检查相关信号只可能从 stderr 来。
+
+⚠️ 若遇"工具不存在 / 字段不符"等疑似版本相关错误，先按 `## 3. 工具表` + `references/tool-manifest.json` 重核并重试一次；仍不通过时，再建议用户升级 skill —— 命令以 stderr 里 `升级命令:` 行实际输出为准（global 装的带 `-g`，project 装的不带）。

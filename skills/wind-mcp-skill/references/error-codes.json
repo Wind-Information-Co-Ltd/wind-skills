@@ -1,138 +1,32 @@
 {
-  "schema_version": 1,
-  "description": "wind-mcp-skill CLI 错误码字典。CLI 内置一份兼容的分类、重试、fallback 与 agent_action 规则，运行时不依赖本文件。",
+  "schema_version": 2,
+  "description": "wind-mcp-skill CLI 错误码字典。每条 code 对应一段 agent_action（诊断 + 行动一体）。CLI 内置同一份映射,运行时不依赖本文件;本文件作为开发者参考与监控/集成的码表。",
+  "envelope_contract": {
+    "success": "成功路径不返回 envelope,直接 stdout 输出纯数据。call 命令透传 result.content[0].text(JSON 字符串则 parse 后输出)；其它命令直接输出结构化对象;help 输出 USAGE 纯文本。exit code 0。",
+    "failure": "失败路径返回 envelope: { ok: false, error: { code, agent_action }, notices }。exit code 1。agent 用 exit code 判断成功/失败,失败时按 error.code 分支处理 + 按 error.agent_action 执行。"
+  },
   "codes": {
-    "USAGE_ERROR": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "读取 data.usage，按可用子命令和参数格式重新构造命令。"
-    },
-    "INVALID_PARAMS_JSON": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "修正 params_json 或 shell 转义后重试，不要切换工具。"
-    },
-    "UNKNOWN_SERVER_TYPE": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "从 error.hint 或 SKILL.md 的可用 server_type 中重新选择。"
-    },
-    "UNKNOWN_TOOL_NAME": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "读取 error.context.available_tools，并按意图路由规则为当前 server_type 重新选择合法工具。"
-    },
-    "TOOL_MANIFEST_INVALID": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "检查 references/tool-manifest.json 是否存在且为合法 JSON；本地 skill 安装可能不完整或损坏。"
-    },
-    "UNKNOWN_SCOPE": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "让用户选择 Key 存放位置后，用 --scope global 或 --scope skill 重试 setup-key。"
-    },
-    "OPEN_PORTAL_FAILED": {
-      "category": "client",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "把 data.url 告知用户，让用户在自己的浏览器中手动打开。"
-    },
-    "PARAM_VALIDATION_ERROR": {
-      "category": "schema",
-      "retryable": false,
-      "fallback_allowed": true,
-      "agent_action": "先按 SKILL.md 和 references 核对字段名、必填项、日期格式、枚举值、server_type 和 tool_name；专项工具修正后仍不适合时，才考虑 analytics_data。"
-    },
-    "CONFIG_WRITE_ERROR": {
-      "category": "filesystem",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "检查目标配置路径是否可写，或让用户改选 setup-key 的另一种 scope。"
-    },
-    "KEY_MISSING": {
-      "category": "auth",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "引导用户获取 WIND_API_KEY 并用 setup-key 配置；不要改用 analytics_data。"
-    },
-    "KEY_INVALID": {
-      "category": "auth",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "让用户重新生成或替换 API Key，不要通过切换 Wind 工具绕过。"
-    },
-    "KEY_FORBIDDEN_SERVER": {
-      "category": "auth",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "当前 Key 可能没有该 server 权限；让用户确认权限或选择已授权的数据服务。"
-    },
-    "RATE_LIMIT_DAILY": {
-      "category": "quota",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "日额度已用尽，等待额度刷新或更换有效 Key。"
-    },
-    "RATE_LIMIT_QPS": {
-      "category": "quota",
-      "retryable": true,
-      "fallback_allowed": false,
-      "agent_action": "短暂等待后原样重试，不要为了绕过 QPS 而切换工具。"
-    },
-    "BALANCE_INSUFFICIENT": {
-      "category": "quota",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "提示用户充值或更换有余额的有效 Key。"
-    },
-    "NETWORK_ERROR": {
-      "category": "network",
-      "retryable": true,
-      "fallback_allowed": false,
-      "agent_action": "检查网络、代理、DNS、超时或 Codex 沙箱联网权限，然后原样重试。"
-    },
-    "SERVER_5XX": {
-      "category": "backend",
-      "retryable": true,
-      "fallback_allowed": false,
-      "agent_action": "稍后原样重试；若提示超时，可降低请求复杂度。"
-    },
-    "RESPONSE_PARSE_ERROR": {
-      "category": "backend",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "后端响应格式异常或发生变化；保留原始错误信息并联系 Wind 支持。"
-    },
-    "NO_RESULTS": {
-      "category": "backend",
-      "retryable": false,
-      "fallback_allowed": true,
-      "agent_action": "在不改变用户意图的前提下调整关键词或参数；专项路径仍不适合时，可用 analytics_data 做结构化取数兜底。"
-    },
-    "MCP_PROTOCOL_ERROR": {
-      "category": "backend",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "检查 error.message；若能明确修正请求形态则修正，否则保留后端原文并联系支持。"
-    },
-    "TOOL_RUNTIME_ERROR": {
-      "category": "backend",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "保留后端原文，检查请求规模、字段口径和数据覆盖；不能明确修正时停止并告知用户。"
-    },
-    "UNKNOWN": {
-      "category": "unknown",
-      "retryable": false,
-      "fallback_allowed": false,
-      "agent_action": "不要盲目重试；先检查 error.message 和 context，能明确定位本地问题则修正，否则报告原始错误。"
-    }
+    "USAGE_ERROR": "命令用法不正确。按 agent_action 中嵌入的 USAGE 重新构造命令。",
+    "INVALID_PARAMS_JSON": "call 第三参数 JSON 解析失败。按 shell 转义规则修正后重试同一 server_type + tool_name,不要换工具。",
+    "UNKNOWN_SERVER_TYPE": "server_type 不在可用列表内。读 USAGE 或 SKILL.md 重选。",
+    "UNKNOWN_TOOL_NAME": "tool_name 不属于该 server_type。读 references/tool-manifest.json 查合法 tool 清单,按 SKILL.md 意图路由规则重选,不要 fallback 到 analytics_data。",
+    "TOOL_MANIFEST_INVALID": "本地工具清单缺失或非法 JSON。提示用户重装 skill。",
+    "UNKNOWN_SCOPE": "setup-key 缺 --scope 或 scope 非法。先 AskUserQuestion 询问用户后带 --scope <global|skill> 重试。",
+    "OPEN_PORTAL_FAILED": "本地无法启动浏览器。把 agent_action 中的 url 告知用户手动打开。",
+    "PARAM_VALIDATION_ERROR": "后端参数验证失败。按 SKILL.md 工具表和 references/indicators.md 逐字段核对后重试;多次失败且属于结构化取数可改用 analytics_data。",
+    "CONFIG_WRITE_ERROR": "配置文件写入失败。检查路径权限或换 scope。",
+    "KEY_MISSING": "WIND_API_KEY 未配置。立即执行 cli.mjs open-portal,获取 Key 后执行 setup-key,再重试原调用。不要换 analytics_data 绕过。",
+    "KEY_INVALID": "API Key 无效或过期。让用户重新生成,setup-key 配置后重试。",
+    "KEY_FORBIDDEN_SERVER": "Key 没有该 server 权限。让用户在开发者中心确认权限。",
+    "RATE_LIMIT_DAILY": "日额度用尽。等次日刷新或换 Key。",
+    "RATE_LIMIT_QPS": "QPS 限流。等 3-5 秒后原样重试。",
+    "BALANCE_INSUFFICIENT": "余额不足。提示用户充值或换 Key。",
+    "NETWORK_ERROR": "网络/DNS/代理/超时/沙箱拦截。修复后原样重试。",
+    "SERVER_5XX": "后端服务异常。稍后原样重试,或降低请求复杂度。",
+    "RESPONSE_PARSE_ERROR": "后端响应格式异常。保留原文联系万得支持。",
+    "NO_RESULTS": "命中数据为空。调整关键词重试;专项无果且属结构化取数可改用 analytics_data。",
+    "MCP_PROTOCOL_ERROR": "MCP 协议层错误。能明确修正请求形态则修正,否则保留原文联系支持。",
+    "TOOL_RUNTIME_ERROR": "后端工具运行错误。检查请求规模/字段口径/数据覆盖,不能修正则停止。",
+    "UNKNOWN": "未知错误。不要盲目重试;读原文定位问题,无法定位则保留原文告知用户并停止。"
   }
 }

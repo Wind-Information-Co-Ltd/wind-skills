@@ -5,7 +5,13 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
-  mkdirSync
+  mkdirSync,
+  statSync,
+  unlinkSync,
+  readdirSync,
+  closeSync,
+  openSync,
+  utimesSync,
 } from 'node:fs';
 import {
   homedir
@@ -16,10 +22,12 @@ import {
   resolve
 } from 'node:path';
 import {
-  fileURLToPath
+  fileURLToPath,
+  pathToFileURL,
 } from 'node:url';
 import {
-  spawn
+  spawn,
+  execFileSync,
 } from 'node:child_process';
 
 const SKILL_VERSION = '1.6.1';
@@ -68,9 +76,23 @@ const SKILL_DIR = dirname(dirname(fileURLToPath(
   import.meta.url)));
 
 const UPDATE_CHECK_PATH = join(SKILL_DIR, 'scripts', 'update-check.mjs');
-const UPDATE_STATE_FILE = join(homedir(), '.cache', 'wind-aifinmarket', 'update-state.json');
+const CACHE_DIR = join(homedir(), '.cache', 'wind-aifinmarket');
+const UPDATE_STATE_FILE = join(CACHE_DIR, 'update-state.json');
 const TOOL_MANIFEST_PATH = join(SKILL_DIR, 'references', 'tool-manifest.json');
 const SKILL_NAME = 'wind-mcp-skill';
+
+// 失败 / 更新通知 sentinel: ~/.cache/wind-aifinmarket/{failure,update}-shown-<skill>-<sid>
+// per-skill 隔离: 文件名带 SKILL_NAME, 多 skill 共享 CACHE_DIR 时各自独立 dedup
+// 两个独立 sentinel,语义完全平行:
+//   mtime ≤ 24h: 视为"本会话已展示" → 静默
+//   mtime > 24h: 视为过期(同 sid 重用风险) → 重新允许展示
+// 启动时清理 mtime > 1d 的 sentinel 文件防累积 (与 fresh 阈值对齐, 过期即清)
+// cleanup 用 prefix 匹配,跨 skill 互清也只清过期的,无副作用
+const FAILURE_SENTINEL_PREFIX = 'failure-shown-';
+const UPDATE_SENTINEL_PREFIX = 'update-shown-';
+const SENTINEL_PREFIXES = [FAILURE_SENTINEL_PREFIX, UPDATE_SENTINEL_PREFIX];
+const SENTINEL_FRESH_MS = 24 * 60 * 60 * 1000;
+const SENTINEL_CLEANUP_MS = 24 * 60 * 60 * 1000;
 
 const CALL_EXAMPLES = [
   `cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH公司基本档案"}'`,
@@ -96,13 +118,26 @@ function spawnUpdateCheck() {
   } catch {}
 }
 
+// global lock 路径(XDG / ~/.agents); 其余视为 project lock。
+// 与 update-check.mjs 中同名函数语义对齐, 用于按 scope 区分 -g 升级命令。
+function globalLockPaths() {
+  const xdg = process.env.XDG_STATE_HOME;
+  return [
+    xdg ? join(xdg, 'skills', '.skill-lock.json') : null,
+    join(homedir(), '.agents', '.skill-lock.json'),
+  ].filter(Boolean);
+}
+
+function classifyLockScope(lockPath) {
+  return globalLockPaths().includes(lockPath) ? 'global' : 'project';
+}
+
+// 按 scope 隔离的 live hash. 返回 { [name]: { global?: hash, project?: hash } }.
+// global 升了 / project 没升 这种半升级状态, filter 必须按 scope 匹配才能正确保留 project 那条。
 function getInstalledHashes() {
   const result = {};
   const candidates = new Set();
-  const xdg = process.env.XDG_STATE_HOME;
-  candidates.add(xdg ?
-    join(xdg, 'skills', '.skill-lock.json') :
-    join(homedir(), '.agents', '.skill-lock.json'));
+  for (const p of globalLockPaths()) candidates.add(p);
   for (const start of [SKILL_DIR, process.cwd()]) {
     let dir = resolve(start);
     while (true) {
@@ -114,11 +149,14 @@ function getInstalledHashes() {
   }
   for (const lockPath of candidates) {
     if (!existsSync(lockPath)) continue;
+    const scope = classifyLockScope(lockPath);
     try {
       const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
       for (const [name, entry] of Object.entries(lock?.skills || {})) {
         const hash = entry?.skillFolderHash || entry?.computedHash;
-        if (hash && !result[name]) result[name] = hash;
+        if (!hash) continue;
+        if (!result[name]) result[name] = {};
+        if (!result[name][scope]) result[name][scope] = hash;
       }
     } catch {}
   }
@@ -128,14 +166,18 @@ function getInstalledHashes() {
 function filterAlreadyUpgraded(outdated) {
   const installed = getInstalledHashes();
   return outdated.filter(o => {
-    const live = installed[o.name];
-    if (!live) return true; // 找不到 lock,保守保留
-    // 优先用同类型的 skillFolderHash 比较（update-check.mjs v2 记录）
-    if (o.installedHash) return live === o.installedHash;
+    const scopeMap = installed[o.name];
+    if (!scopeMap) return true; // 找不到任何 lock,保守保留
+    // outdated 缺 scope (旧缓存) → 跨 scope 取首个可用 hash, 维持原行为
+    const liveHash = o.scope
+      ? scopeMap[o.scope]
+      : (scopeMap.global || scopeMap.project);
+    if (!liveHash) return true; // 该 scope 下没装(异常),保守保留
+    if (o.installedHash) return liveHash === o.installedHash;
     // 兼容旧缓存条目：退化到 shortHash 前缀匹配
     const cur = o.current || '';
     if (!cur) return true;
-    return live.startsWith(cur);
+    return liveHash.startsWith(cur);
   });
 }
 
@@ -172,7 +214,7 @@ function writeCacheView(view, newState) {
   } catch {}
 }
 
-function collectUpdateNotices() {
+export function collectUpdateNotices() {
   try {
     const view = readCacheView();
     if (!view || !view.state) return [];
@@ -226,89 +268,320 @@ function collectUpdateNotices() {
         severity: 'info',
         message: `检测到 ${state.outdated.length} 个 skill 有新版`,
         items: state.outdated.map((o) => {
-          const isGitee = typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com');
-          const upgradeCmd = isGitee ?
-            `npx skills add ${o.sourceUrl} --skill ${o.name} -g -y  # Gitee 源不支持 update,需重装` :
-            `npx skills update ${o.name} -g -y`;
+          // scope 决定是否带 -g: global 加, project 不加。
+          // outdated 缺 scope (旧缓存或测试 seed) 时回退 'global' 保兼容。
+          const scope = o.scope || 'global';
+          const scopeFlag = scope === 'global' ? ' -g' : '';
+          const isGitee = o.host === 'gitee'
+            || (typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com'));
+          const upgradeCmd = isGitee
+            ? `npx skills add ${o.sourceUrl} --skill ${o.name}${scopeFlag} -y  # Gitee 源不支持 update,需重装`
+            : `npx skills update ${o.name}${scopeFlag} -y`;
           return {
             name: o.name,
             current: o.current || null,
             latest: o.latest || null,
             source: isGitee ? 'gitee' : 'github',
             source_url: o.sourceUrl || null,
+            scope,
             upgrade_command: upgradeCmd,
           };
         }),
       }];
     }
 
-    if (state.status === 'transient_error') {
-      return [{
-        type: 'update_check_failed',
-        severity: 'warn',
-        reason: state.reason || 'unknown',
-        message: '检查更新失败，可能是网络问题',
-      }];
-    }
-
-    if (state.status === 'unknown') {
-      return [{
-        type: 'update_check_unknown',
-        severity: 'warn',
-        reason: state.reason || 'unknown',
-        message: '无法确认 wind skills 是否最新',
-      }];
-    }
+    // transient_error / unknown 不进 notices(stdout 完全干净)。
+    // 失败提示走 stderr 一次性输出, 见 maybeNotifyFailureOnce()。
   } catch {}
   return [];
 }
 
+// 会话标识: walk 进程树跳过 shell 层,找首个非 shell 祖先作为 sessionId。
+// 对 Claude Code / Codex / Cursor 等 "每次 spawn 新 shell" 的 agent, 直接用 ppid 会失配,
+// 因为 shell 是 ephemeral 的; 真正稳定的是再往上一级的 agent 进程(claude/codex/cursor)。
+// Linux/WSL/Git Bash(MSYS2): /proc/<pid>/stat 走树, ~1ms
+// macOS: ps -p ... -o ppid,lstart,comm, ~50ms
+// Windows native: powershell -EncodedCommand 跑 Get-CimInstance Win32_Process, ~500ms-1s
+//   (Windows 慢, 用文件缓存 5min TTL 避免每次都付)
+// 跳过这些进程, 它们都是 ephemeral 的 shell / console-host 层, 不构成"会话"
+const SHELL_NAMES = new Set([
+  // 主流 Unix shell
+  'bash', 'sh', 'zsh', 'dash', 'fish', 'csh', 'ksh', 'tcsh',
+  // 备选/罕见 Unix shell
+  'xonsh', 'nu', 'nushell', 'ion', 'elvish', 'oksh', 'mksh', 'yash', 'rc', 'es',
+  // Windows native shell
+  'cmd.exe', 'powershell.exe', 'pwsh.exe',
+  // MSYS2 / Cygwin / Git Bash 下的 shell
+  'bash.exe', 'sh.exe', 'zsh.exe', 'dash.exe', 'fish.exe', 'tcsh.exe', 'ksh.exe',
+  // WSL launcher (ephemeral, 跳过它走 wsl.exe 的父进程)
+  'wsl.exe', 'wslhost.exe',
+  // Console hosts / shell helper (per-shell ephemeral, 应该跳过)
+  'conhost.exe',     // cmd/pwsh 的 console host
+  'mintty.exe',      // Git Bash 默认终端
+  'msys-1.0.dll',    // MSYS infra (理论上不会出现, just in case)
+  'cygwin1.dll',     // Cygwin infra
+]);
+const SESSION_CACHE_FILE = join(CACHE_DIR, 'session.id');
+const SESSION_CACHE_TTL_MS = 5 * 60 * 1000;  // 5min
+
+// /proc walk (Linux / WSL / Git Bash MSYS2): 优先尝试,失败再走平台分支
+function tryProcWalk() {
+  try {
+    let pid = process.ppid;
+    let hops = 0;
+    while (pid && pid > 1 && hops < 10) {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const commEnd = stat.lastIndexOf(')');
+      const name = stat.slice(stat.indexOf('(') + 1, commEnd);
+      const after = stat.slice(commEnd + 2).split(' ');
+      const parentPid = parseInt(after[1], 10);
+      const starttime = after[19];
+      if (!SHELL_NAMES.has(name.toLowerCase())) {
+        return `${pid}-${starttime}`;
+      }
+      pid = parentPid;
+      hops++;
+    }
+  } catch {}
+  return null;
+}
+
+// macOS ps walk
+function tryMacWalk() {
+  try {
+    let pid = process.ppid;
+    let hops = 0;
+    while (pid && pid > 1 && hops < 10) {
+      const out = execFileSync('ps', ['-p', String(pid), '-o', 'ppid=,lstart=,comm='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 3000,
+      }).trim();
+      if (!out) break;
+      // 格式: "<ppid> <lstart 5 字段> <comm>"
+      // lstart 例: "Mon May 20 09:00:00 2026", 5 字段固定
+      const parts = out.split(/\s+/);
+      if (parts.length < 7) break;
+      const parentPid = parseInt(parts[0], 10);
+      const lstart = parts.slice(1, 6).join(' ');  // 5 字段
+      const comm = parts.slice(6).join(' ');
+      // comm 可能是带路径的(如 /usr/bin/bash), 取 basename
+      const name = (comm.split('/').pop() || '').toLowerCase();
+      if (!SHELL_NAMES.has(name)) {
+        // 用 lstart 替代 starttime (字符串形式但稳定)
+        const cleanStart = lstart.replace(/[^a-zA-Z0-9]/g, '');
+        return `${pid}-${cleanStart}`;
+      }
+      pid = parentPid;
+      hops++;
+    }
+  } catch {}
+  return null;
+}
+
+// Windows PowerShell walk (一次 EncodedCommand 调用走全树, 避免多次 spawn 开销)
+function tryWindowsWalk() {
+  try {
+    // 拼 PowerShell 脚本: 走树, 跳 shell, 输出 "MATCH:<pid>:<ticks>" 或 "NONE"
+    const ps = [
+      "$shells = @('cmd.exe','powershell.exe','pwsh.exe','bash.exe','sh.exe','zsh.exe','dash.exe','fish.exe','tcsh.exe','ksh.exe','wsl.exe','wslhost.exe','conhost.exe','mintty.exe')",
+      `$cur = ${process.ppid}`,
+      "$hops = 0",
+      "while ($cur -gt 4 -and $hops -lt 10) {",
+      "  try { $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$cur\" } catch { break }",
+      "  if (!$p) { break }",
+      "  $name = $p.Name.ToLower()",
+      "  if (-not ($shells -contains $name)) {",
+      "    $ct = if ($p.CreationDate) { $p.CreationDate.Ticks } else { 0 }",
+      "    Write-Output (\"MATCH:\" + $cur + \":\" + $ct)",
+      "    exit 0",
+      "  }",
+      "  $cur = [int]$p.ParentProcessId",
+      "  $hops++",
+      "}",
+      "Write-Output 'NONE'",
+    ].join('; ');
+    const encoded = Buffer.from(ps, 'utf16le').toString('base64');
+    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 8000,
+    }).trim();
+    const m = out.match(/MATCH:(\d+):(\d+)/);
+    if (m) return `${m[1]}-${m[2]}`;
+  } catch {}
+  return null;
+}
+
+// 文件缓存(Windows 慢, 5min 内复用)
+function readSessionCache() {
+  try {
+    if (!existsSync(SESSION_CACHE_FILE)) return null;
+    const st = statSync(SESSION_CACHE_FILE);
+    if (Date.now() - st.mtimeMs > SESSION_CACHE_TTL_MS) return null;
+    const content = readFileSync(SESSION_CACHE_FILE, 'utf8').trim();
+    return content || null;
+  } catch { return null; }
+}
+function writeSessionCache(sid) {
+  try {
+    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(SESSION_CACHE_FILE, sid);
+  } catch {}
+}
+
+// 模块内存缓存(同一 Node 进程内多次调用只算一次)
+let _sessionIdMemo = null;
+
+export function getSessionId() {
+  if (_sessionIdMemo) return _sessionIdMemo;
+
+  // 1. 文件缓存(主要服务 Windows: PowerShell 慢, 5min 内不重复走)
+  const cached = readSessionCache();
+  if (cached) {
+    _sessionIdMemo = cached;
+    return cached;
+  }
+
+  // 2. /proc 优先(Linux/WSL/Git Bash 都试一下, 都能命中)
+  let sid = tryProcWalk();
+
+  // 3. 平台分支
+  if (!sid) {
+    if (process.platform === 'darwin') sid = tryMacWalk();
+    else if (process.platform === 'win32') sid = tryWindowsWalk();
+  }
+
+  // 4. fallback: ppid (degraded, 但至少同一 shell 内能 dedup)
+  if (!sid) sid = String(process.ppid);
+
+  _sessionIdMemo = sid;
+  writeSessionCache(sid);
+  return sid;
+}
+
+// 失败 / 更新 sentinel: 按 <SKILL_NAME>-<sessionId> 隔离, mtime 控制时效, 两种独立文件
+// per-skill 命名避免多个 skill 共用同 sid 时 dedup 互相覆盖
+export function failureSentinelPath(sid = getSessionId()) {
+  return join(CACHE_DIR, `${FAILURE_SENTINEL_PREFIX}${SKILL_NAME}-${sid}`);
+}
+export function updateSentinelPath(sid = getSessionId()) {
+  return join(CACHE_DIR, `${UPDATE_SENTINEL_PREFIX}${SKILL_NAME}-${sid}`);
+}
+
+// 启动时清理 mtime > 7d 的旧 sentinel(两种前缀都扫)防累积
+export function cleanupStaleSentinels() {
+  try {
+    if (!existsSync(CACHE_DIR)) return;
+    const now = Date.now();
+    for (const name of readdirSync(CACHE_DIR)) {
+      if (!SENTINEL_PREFIXES.some(p => name.startsWith(p))) continue;
+      const p = join(CACHE_DIR, name);
+      try {
+        const st = statSync(p);
+        if (now - st.mtimeMs > SENTINEL_CLEANUP_MS) unlinkSync(p);
+      } catch {}
+    }
+  } catch {}
+}
+
+// 通用 sentinel 时效检查 + 触发
+function sentinelFresh(sentinelPath) {
+  if (!existsSync(sentinelPath)) return false;
+  try {
+    const st = statSync(sentinelPath);
+    return Date.now() - st.mtimeMs <= SENTINEL_FRESH_MS;
+  } catch { return false; }
+}
+function touchSentinel(sentinelPath) {
+  try {
+    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+    const fd = openSync(sentinelPath, 'a');
+    closeSync(fd);
+    const now = new Date();
+    utimesSync(sentinelPath, now, now);
+  } catch {}
+}
+
+// 读 cache 失败状态 → 检查 sentinel → 第一次就 stderr 打通知 + touch sentinel; 否则静默。
+// 仅在 cmd === 'call' 调用; 完全不动 stdout。
+export function maybeNotifyFailureOnce() {
+  try {
+    const view = readCacheView();
+    if (!view || !view.state) return;
+    const state = view.state;
+    if (state.status !== 'transient_error' && state.status !== 'unknown') return;
+    if (state.snoozedUntil && new Date(state.snoozedUntil) > new Date()) return;
+
+    const sentinel = failureSentinelPath();
+    if (sentinelFresh(sentinel)) return;
+
+    const reason = state.reason || 'unknown';
+    process.stderr.write(`[wind-skills] 更新检测失败 (reason=${reason}), 不影响本次调用。\n`);
+    touchSentinel(sentinel);
+  } catch {}
+}
+
+// 检测到新版可用 → 检查 sentinel → 第一次就 stderr 打通知 + touch sentinel; 否则静默。
+// 复用 collectUpdateNotices() 已有的 filterAlreadyUpgraded / snooze 过滤逻辑。
+// 仅在 cmd === 'call' 调用; 完全不动 stdout。
+export function maybeNotifyUpdateOnce() {
+  try {
+    const notices = collectUpdateNotices();
+    const updateNotice = notices.find(n => n && n.type === 'update_available');
+    if (!updateNotice || !Array.isArray(updateNotice.items) || updateNotice.items.length === 0) return;
+
+    const sentinel = updateSentinelPath();
+    if (sentinelFresh(sentinel)) return;
+
+    // 格式化 stderr 输出
+    const lines = ['[wind-skills] 检测到新版可用:'];
+    for (const item of updateNotice.items) {
+      const ver = item.current && item.latest ? `${item.current} → ${item.latest}` : (item.latest || '?');
+      lines.push(`  ${item.name}: ${ver}`);
+      lines.push(`  升级命令: ${item.upgrade_command}`);
+    }
+    process.stderr.write(lines.join('\n') + '\n');
+    touchSentinel(sentinel);
+  } catch {}
+}
+
 // ───── 工具函数 ─────
 
-function writeEnvelope({
-  ok,
-  command = activeCommand,
-  data,
-  error,
-  notices = []
-}) {
-  // All agent-facing output must go through this envelope. Keep stderr free for future verbose logs only.
+// 成功路径: `call` 命令完整透传 MCP `result` 对象,**不做任何 parse 或抽取**。
+// 业务数据通常在 result.content[0].text(可能是 JSON 字符串,由 agent 自行 parse)。
+// 其它命令(help / open-portal / setup-key)直接输出它们的结构化数据。
+// 全部不带任何 envelope / meta 包裹。
+function writeRawCallSuccess(result) {
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+}
+
+function writePlainSuccess(data) {
+  // help / open-portal / setup-key 等结构化输出,直接 JSON
+  process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+}
+
+// 失败路径: 极简 envelope { ok:false, error:{code, agent_action} }
+// 所有更新检查信号(update_available / 失败检测)走 stderr 一次性通道, stdout 永远不带。
+function writeErrorEnvelope(code, detail) {
   const envelope = {
-    ok,
-    command,
-    ...(data === undefined ? {} : {
-      data
-    }),
-    ...(error ? {
-      error
-    } : {}),
-    notices,
-    meta: {
-      cli_version: SKILL_VERSION,
-      schema_version: OUTPUT_SCHEMA_VERSION
+    ok: false,
+    error: {
+      code,
+      agent_action: buildAgentAction(code, detail),
     },
   };
   process.stdout.write(JSON.stringify(envelope, null, 2) + '\n');
 }
 
-function die(code, message, ctx = {}, exitCode = 1) {
-  writeEnvelope({
-    ok: false,
-    command: ctx.command || activeCommand,
-    data: ctx.data,
-    error: buildErrorObject(code, message, ctx),
-  });
+function die(code, detail = null, exitCode = 1) {
+  writeErrorEnvelope(code, detail);
   process.exit(exitCode);
 }
 
 function exitWithUsage(usage, exitCode = 0) {
-  die('USAGE_ERROR', '命令用法不正确', {
-    command: activeCommand || 'help',
-    data: {
-      usage
-    },
-    extraHint: '按 data.usage 修正命令参数后重试。',
-  }, exitCode);
+  // USAGE 文本嵌入 agent_action 让 agent 自包含拿到帮助
+  die('USAGE_ERROR', `USAGE:\n${usage}`, exitCode);
 }
 
 function maskKey(key) {
@@ -341,9 +614,7 @@ function parseDotenv(content) {
 function getServer(server_type) {
   const server = SERVERS[server_type];
   if (!server) {
-    die('UNKNOWN_SERVER_TYPE', `未知 server_type: ${server_type}`, {
-      extraHint: `可用 server_type: ${Object.keys(SERVERS).join(' / ')}`,
-    });
+    die('UNKNOWN_SERVER_TYPE', `未知 server_type: ${server_type}. 可用: ${Object.keys(SERVERS).join(' / ')}`);
   }
   return server;
 }
@@ -370,9 +641,7 @@ function loadToolManifest() {
     }
     return manifest;
   } catch (err) {
-    die('TOOL_MANIFEST_INVALID', `工具清单读取失败: ${err.message}`, {
-      extraHint: `检查 ${TOOL_MANIFEST_PATH} 是否存在且为合法 JSON；CLI 以该文件作为 server_type + tool_name 的权威清单。`,
-    });
+    die('TOOL_MANIFEST_INVALID', `工具清单读取失败: ${err.message}`);
   }
 }
 
@@ -381,13 +650,7 @@ function validateToolSelection(server_type, toolName) {
   const manifest = loadToolManifest();
   const tools = manifest[server_type];
   if (!tools.includes(toolName)) {
-    die('UNKNOWN_TOOL_NAME', `工具名不属于 ${server_type}: ${toolName}`, {
-      server_type,
-      tool: toolName,
-      available_tools: tools,
-      extraHint: `请不要继续试错调用。先按 SKILL.md 意图路由重新判断 server_type + tool_name。\n` +
-        `当前 server_type 可用工具: ${tools.join(' / ')}`,
-    });
+    die('UNKNOWN_TOOL_NAME', `工具名 "${toolName}" 不属于 server_type "${server_type}"。`);
   }
 }
 
@@ -412,10 +675,7 @@ function getApiKey() {
     } catch {}
   }
 
-  die('KEY_MISSING', 'WIND_API_KEY 未配置', {
-    extraHint: `先获取 Key：node ${join(SKILL_DIR, 'scripts', 'cli.mjs')} open-portal，或手动访问 ${PORTAL_URL}。\n` +
-      `询问用户选择存放位置后执行：node ${join(SKILL_DIR, 'scripts', 'cli.mjs')} setup-key <KEY> --scope <global|skill>，然后重试原调用。`,
-  });
+  die('KEY_MISSING', 'WIND_API_KEY 未配置');
 }
 
 // ───── 错误码体系 ─────
@@ -444,111 +704,44 @@ function inferErrorCode(msg) {
   return 'UNKNOWN';
 }
 
-function getErrorHint(code, fallback) {
-  for (const [c, , hint] of ERROR_PATTERNS) {
-    if (c === code) return hint;
-  }
-  if (code === 'TOOL_RUNTIME_ERROR') {
-    return '后端工具运行错误。保留后端原文，先检查请求规模、字段口径和数据覆盖；不要直接切换工具绕过。';
-  }
-  return fallback || '未知错误，参考后端原文 + 联系万得支持。';
-}
-
-// Keep these behavior tables compatible with references/error-codes.json.
-// They remain in-file so the CLI can still produce errors if reference files are missing.
-const NO_FALLBACK_CODES = new Set([
-  'INVALID_PARAMS_JSON', 'UNKNOWN_SERVER_TYPE', 'UNKNOWN_TOOL_NAME', 'TOOL_MANIFEST_INVALID', 'UNKNOWN_SCOPE',
-  'USAGE_ERROR', 'OPEN_PORTAL_FAILED', 'CONFIG_WRITE_ERROR', 'KEY_MISSING', 'KEY_INVALID', 'KEY_FORBIDDEN_SERVER',
-  'RATE_LIMIT_DAILY', 'RATE_LIMIT_QPS', 'BALANCE_INSUFFICIENT', 'NETWORK_ERROR',
-  'SERVER_5XX', 'RESPONSE_PARSE_ERROR', 'MCP_PROTOCOL_ERROR', 'TOOL_RUNTIME_ERROR', 'UNKNOWN',
-]);
-const RETRYABLE_CODES = new Set(['RATE_LIMIT_QPS', 'NETWORK_ERROR', 'SERVER_5XX']);
-const ERROR_CATEGORIES = [
-  ['client', new Set(['USAGE_ERROR', 'INVALID_PARAMS_JSON', 'UNKNOWN_SERVER_TYPE', 'UNKNOWN_TOOL_NAME', 'TOOL_MANIFEST_INVALID', 'UNKNOWN_SCOPE', 'OPEN_PORTAL_FAILED'])],
-  ['schema', new Set(['PARAM_VALIDATION_ERROR'])],
-  ['filesystem', new Set(['CONFIG_WRITE_ERROR'])],
-  ['auth', new Set(['KEY_MISSING', 'KEY_INVALID', 'KEY_FORBIDDEN_SERVER'])],
-  ['quota', new Set(['RATE_LIMIT_DAILY', 'RATE_LIMIT_QPS', 'BALANCE_INSUFFICIENT'])],
-  ['network', new Set(['NETWORK_ERROR'])],
-  ['backend', new Set(['SERVER_5XX', 'RESPONSE_PARSE_ERROR', 'NO_RESULTS', 'MCP_PROTOCOL_ERROR', 'TOOL_RUNTIME_ERROR'])],
-];
+// 每个错误码对应一段 NL 处方：诊断 + 行动 一体。
+// agent 读完 agent_action 就能决定下一步,无需再看其它字段。
+// 后端原始 message 由 buildAgentAction() 拼到前面作为诊断上下文。
 const AGENT_ACTIONS = {
-  USAGE_ERROR: '读取 data.usage，按可用子命令和参数格式重新构造命令。',
-  INVALID_PARAMS_JSON: '修正 params_json 或 shell 转义后重试，不要切换工具。',
-  UNKNOWN_SERVER_TYPE: '从 error.hint 或 SKILL.md 的可用 server_type 中重新选择。',
-  UNKNOWN_TOOL_NAME: '读取 error.context.available_tools，并按意图路由规则为当前 server_type 重新选择合法工具。',
-  TOOL_MANIFEST_INVALID: '检查 references/tool-manifest.json 是否存在且为合法 JSON；本地 skill 安装可能不完整或损坏。',
-  UNKNOWN_SCOPE: '让用户选择 Key 存放位置后，用 --scope global 或 --scope skill 重试 setup-key。',
-  OPEN_PORTAL_FAILED: '把 data.url 告知用户，让用户在自己的浏览器中手动打开。',
-  PARAM_VALIDATION_ERROR: '先按 SKILL.md 和 references 核对字段名、必填项、日期格式、枚举值、server_type 和 tool_name；专项工具修正后仍不适合时，才考虑 analytics_data。',
-  CONFIG_WRITE_ERROR: '检查目标配置路径是否可写，或让用户改选 setup-key 的另一种 scope。',
-  KEY_MISSING: '引导用户获取 WIND_API_KEY 并用 setup-key 配置；不要改用 analytics_data。',
-  KEY_INVALID: '让用户重新生成或替换 API Key，不要通过切换 Wind 工具绕过。',
-  KEY_FORBIDDEN_SERVER: '当前 Key 可能没有该 server 权限；让用户确认权限或选择已授权的数据服务。',
-  RATE_LIMIT_DAILY: '日额度已用尽，等待额度刷新或更换有效 Key。',
-  RATE_LIMIT_QPS: '短暂等待后原样重试，不要为了绕过 QPS 而切换工具。',
-  BALANCE_INSUFFICIENT: '提示用户充值或更换有余额的有效 Key。',
-  NETWORK_ERROR: '检查网络、代理、DNS、超时或 Codex 沙箱联网权限，然后原样重试。',
-  SERVER_5XX: '稍后原样重试；若提示超时，可降低请求复杂度。',
-  RESPONSE_PARSE_ERROR: '后端响应格式异常或发生变化；保留原始错误信息并联系 Wind 支持。',
-  NO_RESULTS: '在不改变用户意图的前提下调整关键词或参数；专项路径仍不适合时，可用 analytics_data 做结构化取数兜底。',
-  MCP_PROTOCOL_ERROR: '检查 error.message；若能明确修正请求形态则修正，否则保留后端原文并联系支持。',
-  TOOL_RUNTIME_ERROR: '保留后端原文，检查请求规模、字段口径和数据覆盖；不能明确修正时停止并告知用户。',
-  UNKNOWN: '不要盲目重试；先检查 error.message 和 context，能明确定位本地问题则修正，否则报告原始错误。',
+  USAGE_ERROR: '命令用法不正确。读取 stdout 中的 USAGE 文本（每条 cli 调用都会输出），按可用子命令和参数格式重新构造命令后重试。',
+  INVALID_PARAMS_JSON: '`call` 命令第三参数必须是合法 JSON 字符串。按当前 shell 类型调整转义（Bash 用外层单引号、PowerShell 用 \\" 转义内部双引号），修正后重试同一 server_type + tool_name；不要切换工具。',
+  UNKNOWN_SERVER_TYPE: 'server_type 不在可用列表内。运行 `node scripts/cli.mjs`（无参）查看 USAGE 列出的合法 server_type，或读 SKILL.md 第 1 节"数据范围"重新选择，再重试。',
+  UNKNOWN_TOOL_NAME: 'tool_name 不属于该 server_type。读取 `references/tool-manifest.json` 查询当前 server_type 的合法 tool 清单，按意图路由规则（SKILL.md "意图判定与路由顺序"）重新选择 tool 后重试；不要直接 fallback 到 analytics_data。',
+  TOOL_MANIFEST_INVALID: '本地 `references/tool-manifest.json` 缺失或非法 JSON。skill 安装可能不完整,提示用户重装：`npx skills update wind-mcp-skill -g -y`。',
+  UNKNOWN_SCOPE: '`setup-key` 命令必须带 --scope global 或 --scope skill。先用 AskUserQuestion 询问用户 Key 存放位置后,带上 --scope 参数重试。',
+  OPEN_PORTAL_FAILED: '本地无法自动打开浏览器。把 stdout 中的 `url` 字段告知用户,让用户在自己的浏览器中手动打开开发者中心。',
+  PARAM_VALIDATION_ERROR: '后端参数验证失败。按 SKILL.md "## 3. 工具表"和 `references/indicators.md` 逐字段核对：字段名、必填项、日期格式、枚举值、server_type、tool_name。修正后重试同一工具；若多次修正仍不通过且属于结构化取数问题,可改用 `analytics_data.get_financial_data`,但 question 必须忠实反映用户原始意图。',
+  CONFIG_WRITE_ERROR: '配置文件写入失败。检查目标路径权限,或用 AskUserQuestion 询问用户改用另一种 scope 后重试 setup-key。',
+  KEY_MISSING: 'WIND_API_KEY 未配置。立即执行 `node scripts/cli.mjs open-portal` 打开万得开发者中心；获取 Key 后执行 `node scripts/cli.mjs setup-key <KEY> --scope <global|skill>`（先用 AskUserQuestion 询问 scope）再重试原调用。不要只把 URL 发给用户,也不要改用 analytics_data 绕过。',
+  KEY_INVALID: 'API Key 无效或过期。引导用户在开发者中心重新生成 Key,用 setup-key 配置后重试；不要通过切换 Wind 工具绕过。',
+  KEY_FORBIDDEN_SERVER: '当前 Key 未订阅该 server 的权限。让用户在开发者中心确认权限,或选择已授权的其他 server；不要换 server 绕过。',
+  RATE_LIMIT_DAILY: 'API Key 当日请求额度已用尽。等次日额度刷新,或让用户更换备用 Key；不要换工具绕过。',
+  RATE_LIMIT_QPS: '请求过于频繁触发 QPS 限流。等待 3-5 秒后原样重试同一工具；不要为绕过限流而切换工具。',
+  BALANCE_INSUFFICIENT: 'API Key 计费余额不足。提示用户在开发者中心充值,或更换有余额的 Key 后重试。',
+  NETWORK_ERROR: '网络请求失败（DNS / 代理 / 超时 / 沙箱拦截）。检查网络环境；在 Codex 环境中确认使用 `sandbox_permissions: "require_escalated"` 联网。修复后原样重试。',
+  SERVER_5XX: '万得后端服务异常。稍后原样重试同一请求；若提示超时,可降低请求复杂度（缩短时间范围、减少字段）。',
+  RESPONSE_PARSE_ERROR: '后端响应格式异常。保留 stdout 错误原文,联系万得支持；不要盲目重试或切换工具。',
+  NO_RESULTS: '查询命中数据为空。先在不改变用户意图的前提下调整关键词或参数重试；若专项路径仍无结果且属于结构化取数,可改用 `analytics_data.get_financial_data` 兜底,question 必须忠实反映用户原始意图。',
+  MCP_PROTOCOL_ERROR: 'MCP 协议层错误。读 stdout 错误原文,若能明确指向请求形态问题则修正后重试,否则保留原文联系万得支持。',
+  TOOL_RUNTIME_ERROR: '后端工具运行错误。读 stdout 错误原文,检查请求规模是否过大、字段口径是否受支持、数据覆盖范围；不能明确修正时停止并告知用户,不要盲目切换工具。',
+  UNKNOWN: '未知错误。不要盲目重试；先读 stdout 错误原文,能定位本地问题（参数 / 配置 / 网络）则修正后重试一次,否则保留原文告知用户并停止。',
 };
 
-function errorCategory(code) {
-  return ERROR_CATEGORIES.find(([, codes]) => codes.has(code))?.[0] || 'unknown';
-}
-
-function fallbackAllowed(code, server_type) {
-  return Boolean(server_type && server_type !== 'analytics_data' && !NO_FALLBACK_CODES.has(code));
-}
-
-function appendFallbackHint(code, hint, server_type) {
-  if (!fallbackAllowed(code, server_type)) return hint;
-  if (code === 'PARAM_VALIDATION_ERROR') {
-    return `${hint} 若修正后仍为工具调用错误，且问题属于结构化取数，可改用 analytics_data.get_financial_data。`;
+// agent_action = 后端原始诊断 + 标准处方,合并为一段 NL 文本。
+// USAGE_ERROR 例外: 嵌入完整 USAGE 不截断,以便 agent 重新构造命令。
+// 其它 code 上限 500 字, 防后端原文过长污染 envelope。
+function buildAgentAction(code, detail) {
+  const template = AGENT_ACTIONS[code] || AGENT_ACTIONS.UNKNOWN;
+  if (detail && typeof detail === 'string' && detail.trim()) {
+    const d = code === 'USAGE_ERROR' ? detail.trim() : detail.trim().slice(0, 500);
+    return `[${d}] ${template}`;
   }
-  if (code === 'NO_RESULTS') {
-    return `${hint} 若专项路径仍无可用结果，且问题属于结构化取数，可改用 analytics_data.get_financial_data。`;
-  }
-  return `${hint} 请先按 SKILL.md 工具表检查 server_type、tool_name 和入参后重试一次；若仍为工具调用错误，可改用 analytics_data.get_financial_data，并将 question 简化为结构化取数问题。`;
-}
-
-function buildErrorObject(code, backendMsg, ctx = {}) {
-  const {
-    server_type,
-    apiKey,
-    extraHint
-  } = ctx;
-  const hint = appendFallbackHint(code, extraHint || getErrorHint(code), server_type);
-  const context = {
-    ...(server_type ? {
-      server_type
-    } : {}),
-    ...(ctx.tool ? {
-      tool: ctx.tool
-    } : {}),
-    ...(apiKey ? {
-      api_key_masked: maskKey(apiKey)
-    } : {}),
-    ...(ctx.available_tools ? {
-      available_tools: ctx.available_tools
-    } : {}),
-  };
-  return {
-    code,
-    message: backendMsg,
-    hint,
-    category: errorCategory(code),
-    retryable: RETRYABLE_CODES.has(code),
-    fallback_allowed: fallbackAllowed(code, server_type),
-    agent_action: AGENT_ACTIONS[code] || AGENT_ACTIONS.UNKNOWN,
-    ...(Object.keys(context).length ? {
-      context
-    } : {}),
-  };
+  return template;
 }
 
 // ───── MCP 调用（裸 HTTP + JSON-RPC + 响应解析兼容 SSE/纯 JSON）─────
@@ -612,22 +805,14 @@ async function mcpRequest(server_type, method, params, {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    die('NETWORK_ERROR', err.message, {
-      server_type,
-      apiKey,
-      extraHint: '网络不通 / DNS 解析失败 / 代理拦截 / 超时。检查网络后重试。',
-    });
+    die('NETWORK_ERROR', `${err.message} (server=${server_type})`);
   }
 
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '');
-    const [code, hint] = HTTP_ERROR_MAP[resp.status] || ['UNKNOWN', '检查参数构造'];
-    const detail = `HTTP ${resp.status} ${resp.statusText}` + (bodyText ? ` | body: ${bodyText.slice(0, 200)}` : '');
-    die(code, detail, {
-      server_type,
-      apiKey,
-      extraHint: hint
-    });
+    const code = HTTP_ERROR_MAP[resp.status]?.[0] || 'UNKNOWN';
+    const detail = `HTTP ${resp.status} ${resp.statusText} (server=${server_type})` + (bodyText ? ` | body: ${bodyText.slice(0, 200)}` : '');
+    die(code, detail);
   }
 
   const text = await resp.text();
@@ -635,27 +820,17 @@ async function mcpRequest(server_type, method, params, {
   try {
     payload = parseSSE(text);
   } catch (err) {
-    die('RESPONSE_PARSE_ERROR', err.message, {
-      server_type,
-      apiKey,
-      extraHint: '响应格式异常，可能是后端版本变更。把后端原文发给万得支持。',
-    });
+    die('RESPONSE_PARSE_ERROR', `${err.message} (server=${server_type})`);
   }
 
   if (payload.error) {
     const msg = payload.error.message || JSON.stringify(payload.error);
-    die('MCP_PROTOCOL_ERROR', msg, {
-      server_type,
-      apiKey
-    });
+    die('MCP_PROTOCOL_ERROR', `${msg} (server=${server_type})`);
   }
 
   if (payload.result?.isError) {
     const msg = payload.result.content?.[0]?.text || JSON.stringify(payload.result);
-    die(inferErrorCode(msg), msg, {
-      server_type,
-      apiKey
-    });
+    die(inferErrorCode(msg), `${msg} (server=${server_type})`);
   }
 
   // 部分工具把业务错误包在 content[0].text 的 JSON 字符串里，必须二次解析。
@@ -670,19 +845,13 @@ async function mcpRequest(server_type, method, params, {
     if (inner) {
       if (typeof inner.mcp_tool_error_code === 'number' && inner.mcp_tool_error_code !== 0) {
         const msg = inner.mcp_tool_error_msg || JSON.stringify(inner);
-        die(inferErrorCode(msg), msg, {
-          server_type,
-          apiKey
-        });
+        die(inferErrorCode(msg), `${msg} (server=${server_type})`);
       }
       if (inner.error && (inner.error.code || inner.error.message)) {
         const errCode = inner.error.code || '';
         const errMsg = inner.error.message || '';
         const combined = errCode ? `${errCode}: ${errMsg}` : errMsg;
-        die(inferErrorCode(combined), combined, {
-          server_type,
-          apiKey
-        });
+        die(inferErrorCode(combined), `${combined} (server=${server_type})`);
       }
     }
   }
@@ -773,9 +942,7 @@ async function cmdSetupKey(...rawArgs) {
   }
 
   if (!['global', 'skill'].includes(scope)) {
-    die('UNKNOWN_SCOPE', `setup-key 未知 scope: ${scope}`, {
-      extraHint: '可选值: global / skill',
-    });
+    die('UNKNOWN_SCOPE', `setup-key 未知 scope: ${scope} (可选: global / skill)`);
   }
 
   let file;
@@ -797,20 +964,10 @@ async function cmdSetupKey(...rawArgs) {
       });
     } else {
       file = join(SKILL_DIR, 'config.json');
-      writeFileSync(file, JSON.stringify({
-        wind_api_key: key
-      }, null, 2) + '\n', {
-        mode: 0o600
-      });
+      writeFileSync(file, JSON.stringify({ wind_api_key: key }, null, 2) + '\n', { mode: 0o600 });
     }
   } catch (err) {
-    die('CONFIG_WRITE_ERROR', `配置写入失败: ${err.message}`, {
-      extraHint: '检查目标路径是否可写，或改用 --scope global/skill 的另一种存放位置。',
-      data: {
-        scope,
-        path: file || null
-      },
-    });
+    die('CONFIG_WRITE_ERROR', `配置写入失败 (scope=${scope}, path=${file || 'n/a'}): ${err.message}`);
   }
 
   return {
@@ -859,16 +1016,19 @@ async function cmdOpenPortal() {
     fallback_message: `如果浏览器没有自动弹出，请手动访问：${PORTAL_URL}`,
   };
   if (spawnError) {
-    die('OPEN_PORTAL_FAILED', `本地无法启动浏览器：${spawnError.message}`, {
-      data,
-      extraHint: '请把 data.url 告知用户，让他在自己设备的浏览器里打开。',
-    });
+    die('OPEN_PORTAL_FAILED', `本地无法启动浏览器: ${spawnError.message} | 用户应手动打开 ${data.url}`);
   }
   return data;
 }
 
 // ───── 主入口 ─────
 
+// 仅当作为可执行脚本直接运行时才跑顶层命令分发;被 import (e.g. 单元测试) 时不副作用。
+const IS_MAIN = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (IS_MAIN) runMain();
+
+function runMain() {
 const [cmd, ...args] = process.argv.slice(2);
 
 const USAGE =
@@ -883,56 +1043,78 @@ const USAGE =
   `典型:\n` +
   `  ${CALL_EXAMPLES.join('\n  ')}`;
 
+// 诊断命令: 输出 sessionId + 进程树, 让用户在不同终端 / 不同 agent 自测
+// 跑法: 在两个独立的 Bash tool 调用(或两次终端命令)里各跑一次 cli.mjs diagnose
+// 比对输出的 sessionId; 如果相同, 跨调用 dedup 机制就生效
+async function cmdDiagnose() {
+  const sid = getSessionId();
+  // 模块缓存可能命中, 强制重算一次, 然后清掉文件缓存重新走以展示完整链路
+  _sessionIdMemo = null;
+  try { unlinkSync(SESSION_CACHE_FILE); } catch {}
+  return {
+    platform: process.platform,
+    node_pid: process.pid,
+    node_ppid: process.ppid,
+    session_id: sid,
+    detection_method: (function() {
+      if (tryProcWalk()) return 'proc';
+      if (process.platform === 'darwin' && tryMacWalk()) return 'macos_ps';
+      if (process.platform === 'win32' && tryWindowsWalk()) return 'windows_powershell';
+      return 'ppid_fallback';
+    })(),
+    cache_dir: CACHE_DIR,
+    sentinel_failure: failureSentinelPath(sid),
+    sentinel_update: updateSentinelPath(sid),
+    notes: '在两个独立终端/Bash tool 调用里各跑一次,比对 session_id 是否相同。' +
+           '相同表示跨调用 dedup 工作。不同表示当前环境没有稳定的非 shell 祖先。',
+  };
+}
+
 const commands = {
   call: () => cmdCall(args[0], args[1], args[2]),
   'open-portal': () => cmdOpenPortal(),
   'setup-key': () => cmdSetupKey(...args),
+  diagnose: () => cmdDiagnose(),
 };
 
 if (!cmd) {
   activeCommand = 'help';
-  writeEnvelope({
-    ok: true,
-    command: 'help',
-    data: {
-      usage: USAGE
-    }
-  });
+  // help: 直接输出 USAGE 纯文本(无包裹)
+  process.stdout.write(USAGE + '\n');
   process.exit(0);
 }
 
 activeCommand = cmd;
 
 if (!commands[cmd]) {
-  writeEnvelope({
-    ok: false,
-    command: cmd,
-    data: {
-      usage: USAGE
-    },
-    error: buildErrorObject('USAGE_ERROR', `未知命令: ${cmd}`, {
-      extraHint: '按 data.usage 选择可用命令后重试。'
-    }),
-  });
-  process.exit(1);
+  die('USAGE_ERROR', `未知命令: ${cmd}\nUSAGE:\n${USAGE}`);
 }
 
 if (cmd === 'call') {
   spawnUpdateCheck();
+  // 顺手清理 mtime > 7d 的僵尸 sentinel(零成本: 同步,目录通常 < 10 个文件)
+  cleanupStaleSentinels();
+  // call 命令一旦进入就尝试两个 stderr 一次性通知:
+  // - 失败检测(transient_error / unknown)
+  // - 检测到新版可用(update_available + 未升级)
+  // 两者独立 sentinel,互不干扰;同会话各自只出一次。
+  // 必须在 die() 抛出前调用(die 直接 exit 会跳过)；
+  // 必须在 stdout 输出前调用(防 stderr/stdout 交错)。
+  maybeNotifyFailureOnce();
+  maybeNotifyUpdateOnce();
 }
 
 commands[cmd]()
   .then((data) => {
-    const notices = cmd === 'call' ? collectUpdateNotices() : [];
-    writeEnvelope({
-      ok: true,
-      command: cmd,
-      data,
-      notices
-    });
+    if (cmd === 'call') {
+      // call: 透传 result 内容 (parse JSON if applicable, else raw text)
+      writeRawCallSuccess(data?.result);
+    } else {
+      // open-portal / setup-key: 直接输出结构化数据 (无 envelope 包裹)
+      writePlainSuccess(data);
+    }
   })
   .catch((err) => {
-    die('UNKNOWN', `执行失败：${err.message || err}`, {
-      extraHint: err.stack ? `stack:\n${err.stack}` : '未知异常，建议联系万得支持。',
-    });
+    die('UNKNOWN', `执行失败: ${err.message || err}${err.stack ? ' | stack: ' + err.stack.slice(0, 300) : ''}`);
   });
+}

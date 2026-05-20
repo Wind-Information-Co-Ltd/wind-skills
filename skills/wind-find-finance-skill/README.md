@@ -70,8 +70,14 @@ AI 加载 SKILL.md 后按守则操作：
 ## 升级
 
 ```bash
-npx skills update -g -y
+# 装到全局(默认推荐)
+npx skills update wind-find-finance-skill -g -y
+
+# 装到当前项目(不带 -g)
+npx skills update wind-find-finance-skill -y
 ```
+
+跑 `node scripts/update-check.mjs` 时, stderr 输出的 `升级命令：` 那一行已按你的安装位置自动选好 `-g` 与否, 直接照搬即可。
 
 `references/skills-catalog.md` 随 skill 包一起更新。
 

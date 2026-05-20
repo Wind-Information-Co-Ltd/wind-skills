@@ -66,10 +66,14 @@ node scripts/cli.mjs open-portal
 ## 升级
 
 ```bash
+# 装到全局(默认推荐)
 npx skills update wind-mcp-skill -g -y
+
+# 装到当前项目(不带 -g)
+npx skills update wind-mcp-skill -y
 ```
 
-调用后如果 stdout JSON 的 `notices` 里出现 `update_available`，按 `items[].upgrade_command` 走即可。
+call 命令调用时,如果检测到新版,stderr 会出现 `[wind-skills] 检测到新版可用` 段落,**`升级命令:` 那一行已经按你的安装位置选好 `-g` 与否**,直接照搬执行即可。
 
 ---
 

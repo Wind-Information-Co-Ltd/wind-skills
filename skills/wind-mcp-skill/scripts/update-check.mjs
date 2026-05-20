@@ -92,6 +92,21 @@ async function writeUnifiedCacheSkill(skillState) {
   });
 }
 
+// baselines 节: 用于 v1 lock 没有 installedAt 时的替代检测
+// key 格式: "<lockPath>:<skillName>:<computedHash>", value: { remoteSha, capturedAt, sourceUrl }
+function readBaseline(key) {
+  const full = readUnifiedCache();
+  return full.baselines?.[key] || null;
+}
+async function writeBaseline(key, value) {
+  await withLock(() => {
+    const full = readUnifiedCache();
+    if (!full.baselines || typeof full.baselines !== 'object') full.baselines = {};
+    full.baselines[key] = { ...value, capturedAt: new Date().toISOString() };
+    writeFileSync(CACHE_FILE, JSON.stringify(full, null, 2));
+  });
+}
+
 function cleanupLegacyFiles() {
   for (const name of LEGACY_CACHE_FILES) {
     const p = join(CACHE_DIR, name);
@@ -129,12 +144,23 @@ function walkUp(startDir) {
   return dirs;
 }
 
+// global lock 候选路径(XDG / ~/.agents); 其它都视为 project lock。
+// 用于区分升级命令是否带 -g —— global 装的加 -g, project 装的不加。
+function globalLockPaths() {
+  const xdg = process.env.XDG_STATE_HOME;
+  return [
+    xdg ? join(xdg, 'skills', '.skill-lock.json') : null,
+    join(homedir(), '.agents', '.skill-lock.json'),
+  ].filter(Boolean);
+}
+
+function classifyLockScope(lockPath) {
+  return globalLockPaths().includes(lockPath) ? 'global' : 'project';
+}
+
 function findLockFiles() {
   const candidates = new Set();
-  const xdg = process.env.XDG_STATE_HOME;
-  candidates.add(xdg
-    ? join(xdg, 'skills', '.skill-lock.json')
-    : join(homedir(), '.agents', '.skill-lock.json'));
+  for (const p of globalLockPaths()) candidates.add(p);
   for (const dir of walkUp(SCRIPT_DIR)) {
     candidates.add(join(dir, 'skills-lock.json'));
   }
@@ -153,7 +179,7 @@ function collectEntries() {
     try {
       const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
       const entry = lock?.skills?.[SKILL_NAME];
-      if (entry) found.push({ entry, lockPath });
+      if (entry) found.push({ entry, lockPath, scope: classifyLockScope(lockPath) });
     } catch {}
   }
   return found;
@@ -170,6 +196,29 @@ function parseSourceUrl(sourceUrl) {
   const m = sourceUrl.match(/(?:github\.com|gitee\.com)[:/]([^/]+)\/([^/]+?)(?:\.git)?(?:$|[/?#])/);
   if (!m) return null;
   return { host, owner: m[1], repo: m[2] };
+}
+
+// 解析 entry 的源 URL 候选。优先级:
+//   1. entry.sourceUrl: v3 lock 必有, 直接用 (单候选, 不瞎试)
+//   2. entry.source 是完整 http(s) URL: 直接用
+//   3. entry.source 是短形式 + entry.sourceType 已知:
+//      - sourceType=github → 直接拼 GitHub
+//      - sourceType=git/gitee → 直接拼 Gitee
+//   4. 短形式但缺 sourceType (极旧 v1 lock): 启发式两候选兜底
+function deriveSourceUrlCandidates(entry) {
+  if (entry?.sourceUrl) return [entry.sourceUrl];
+  if (typeof entry?.source !== 'string' || !entry.source) return [];
+  if (/^https?:\/\//.test(entry.source)) return [entry.source];
+
+  const t = entry.sourceType;
+  if (t === 'github') return [`https://github.com/${entry.source}.git`];
+  if (t === 'git' || t === 'gitee') return [`https://gitee.com/${entry.source}.git`];
+
+  // 兜底: sourceType 完全缺失, 两候选都试
+  return [
+    `https://github.com/${entry.source}.git`,
+    `https://gitee.com/${entry.source}.git`,
+  ];
 }
 
 function normalizeSkillDir(skillPath) {
@@ -250,18 +299,28 @@ function shortHash(h) {
 
 // ───── 通知打印 ─────
 
+// 升级命令拼装。两条规则:
+//   1. scope=global → 加 -g; scope=project → 不加 (项目级安装升级到全局是错的)
+//   2. Gitee 源不支持 update, 退回 add 重装; GitHub 用 update
+// outdated 缺 scope (旧缓存或测试 seed 数据) 时 fallback 'global' 保持兼容。
+export function buildUpgradeCommand(o) {
+  const scope = o.scope || 'global';
+  const scopeFlag = scope === 'global' ? ' -g' : '';
+  const isGitee = o.host === 'gitee'
+    || (typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com'));
+  return isGitee
+    ? `npx skills add ${o.sourceUrl} --skill ${o.name}${scopeFlag} -y  # Gitee 源不支持 update,需重装`
+    : `npx skills update ${o.name}${scopeFlag} -y`;
+}
+
 function printNotice(state) {
   if (state.snoozedUntil && new Date(state.snoozedUntil) > new Date()) return;
 
   if (state.status === 'update_available') {
     const lines = ['', `[wind-skills] 检测到 ${state.outdated.length} 个 skill 有新版:`];
     for (const o of state.outdated) {
-      const isGitee = typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com');
-      const upgradeCmd = isGitee
-        ? `npx skills add ${o.sourceUrl} --skill ${o.name} -g -y  # Gitee 源不支持 update,需重装`
-        : `npx skills update ${o.name} -g -y`;
       lines.push(`  • ${o.name.padEnd(34)} ${o.current || '?'} → ${o.latest}`);
-      lines.push(`    升级: ${upgradeCmd}`);
+      lines.push(`    升级: ${buildUpgradeCommand(o)}`);
     }
     lines.push('');
     process.stderr.write(lines.join('\n') + '\n');
@@ -306,73 +365,104 @@ async function main() {
   let transientError = null;
   let rateLimited = false;
 
-  for (const { entry, lockPath } of entries) {
-    const sourceUrl = entry.sourceUrl;
-    if (!sourceUrl) {
+  for (const { entry, lockPath, scope } of entries) {
+    // 1) 解析候选 sourceUrl: v3 lock 有 sourceUrl 直接用; v1 lock 缺 sourceUrl 时
+    //    从 source 短形式启发式生成 GitHub/Gitee 两个候选, 试到能拉 tree 的那个为准
+    const urlCandidates = deriveSourceUrlCandidates(entry);
+    if (urlCandidates.length === 0) {
       unknownDetails.push({ reason: 'no_source_url', lockPath, source: entry.source });
-      continue;
-    }
-
-    const parsed = parseSourceUrl(sourceUrl);
-    if (!parsed) {
-      unknownDetails.push({ reason: 'unsupported_host', lockPath, sourceUrl });
-      continue;
-    }
-
-    const installedAt = entry.updatedAt || entry.installedAt;
-    if (!installedAt) {
-      unknownDetails.push({ reason: 'no_installed_at', lockPath });
       continue;
     }
 
     const skillDir = normalizeSkillDir(entry.skillPath);
     const ref = entry.ref || null;
 
-    // A: 当前远端 tree
-    const currentTreeResult = await fetchCurrentTree(parsed, ref);
-    if (currentTreeResult.error) {
-      if (currentTreeResult.error === 'rate_limit') { rateLimited = true; break; }
-      transientError = { reason: currentTreeResult.error, sourceUrl, host: parsed.host };
+    let parsed = null;
+    let sourceUrl = null;
+    let currentTree = null;
+    let lastError = null;
+    for (const candidateUrl of urlCandidates) {
+      const p = parseSourceUrl(candidateUrl);
+      if (!p) continue;
+      const r = await fetchCurrentTree(p, ref);
+      if (r.tree) {
+        parsed = p;
+        sourceUrl = candidateUrl;
+        currentTree = r.tree;
+        break;
+      }
+      lastError = r.error;
+      if (r.error === 'rate_limit') { rateLimited = true; break; }
+    }
+    if (rateLimited) break;
+    if (!parsed || !currentTree) {
+      if (lastError) {
+        transientError = { reason: lastError, sourceUrl: urlCandidates[0] };
+      } else {
+        unknownDetails.push({ reason: 'unsupported_host', lockPath, source: entry.source });
+      }
       continue;
     }
 
-    const currentSha = findSkillSha(currentTreeResult.tree, skillDir);
+    const currentSha = findSkillSha(currentTree, skillDir);
     if (!currentSha) {
       unknownDetails.push({ reason: 'path_missing', lockPath, sourceUrl, skillPath: entry.skillPath });
       continue;
     }
 
-    // B: 反查装时刻的 commit → tree
-    const installCommit = await fetchCommitAtTime(parsed, ref, skillDir, installedAt);
-    if (installCommit.error) {
-      if (installCommit.error === 'rate_limit') { rateLimited = true; break; }
-      unknownDetails.push({ reason: `commit_lookup_${installCommit.error}`, lockPath, sourceUrl });
-      continue;
+    const installedAt = entry.updatedAt || entry.installedAt;
+
+    if (installedAt) {
+      // v3 path: 走原 installedAt-反查策略 (精确, 能捕获"装老版本")
+      const installCommit = await fetchCommitAtTime(parsed, ref, skillDir, installedAt);
+      if (installCommit.error) {
+        if (installCommit.error === 'rate_limit') { rateLimited = true; break; }
+        unknownDetails.push({ reason: `commit_lookup_${installCommit.error}`, lockPath, sourceUrl });
+        continue;
+      }
+      const installedTreeResult = await fetchTreeBySha(parsed, installCommit.sha);
+      if (installedTreeResult.error) {
+        if (installedTreeResult.error === 'rate_limit') { rateLimited = true; break; }
+        transientError = { reason: installedTreeResult.error, sourceUrl, host: parsed.host };
+        continue;
+      }
+      const installedSha = findSkillSha(installedTreeResult.tree, skillDir);
+      if (!installedSha) {
+        unknownDetails.push({ reason: 'path_missing_at_install', lockPath, sourceUrl });
+        continue;
+      }
+      if (currentSha === installedSha) continue;
+      outdated.push({
+        name: SKILL_NAME,
+        current: shortHash(installedSha),
+        latest: shortHash(currentSha),
+        sourceUrl, host: parsed.host,
+        installedHash: entry.skillFolderHash || entry.computedHash || null,
+        scope,
+      });
+    } else {
+      // v1 path: 没有 installedAt, 用 baseline 策略
+      // 首次见到这条 entry → 把 currentSha 存为 baseline, 报 up_to_date(静默捕获)
+      // 后续 → 比较新 currentSha 与 baseline.remoteSha, 不等就报 update_available
+      const installedHash = entry.skillFolderHash || entry.computedHash || '';
+      const baselineKey = `${lockPath}:${SKILL_NAME}:${installedHash}`;
+      const baseline = readBaseline(baselineKey);
+      if (!baseline) {
+        // 首次捕获: 静默存 baseline, 报 up_to_date (此 entry 视为最新)
+        await writeBaseline(baselineKey, { remoteSha: currentSha, sourceUrl });
+        continue;
+      }
+      if (baseline.remoteSha === currentSha) continue;  // 远端未变, up_to_date
+      // 远端动了 → update_available
+      outdated.push({
+        name: SKILL_NAME,
+        current: shortHash(baseline.remoteSha),
+        latest: shortHash(currentSha),
+        sourceUrl, host: parsed.host,
+        installedHash,
+        scope,
+      });
     }
-
-    const installedTreeResult = await fetchTreeBySha(parsed, installCommit.sha);
-    if (installedTreeResult.error) {
-      if (installedTreeResult.error === 'rate_limit') { rateLimited = true; break; }
-      transientError = { reason: installedTreeResult.error, sourceUrl, host: parsed.host };
-      continue;
-    }
-
-    const installedSha = findSkillSha(installedTreeResult.tree, skillDir);
-    if (!installedSha) {
-      unknownDetails.push({ reason: 'path_missing_at_install', lockPath, sourceUrl });
-      continue;
-    }
-
-    if (currentSha === installedSha) continue;
-
-    outdated.push({
-      name: SKILL_NAME,
-      current: shortHash(installedSha),
-      latest: shortHash(currentSha),
-      sourceUrl,
-      host: parsed.host,
-      installedHash: entry.skillFolderHash || entry.computedHash || null,
-    });
   }
 
   // ───── 聚合 ─────

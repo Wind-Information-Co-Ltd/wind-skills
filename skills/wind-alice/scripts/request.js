@@ -1,8 +1,10 @@
 import randomUUID from "./uuidv7.js";
 import { spawnUpdateCheck, maybePrintUpdateNotice } from "./update-notify.mjs";
-import { existsSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, parse as parsePath } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_API_URL = "https://alice.wind.com.cn/Weaver/ChatAgent";
@@ -279,7 +281,7 @@ function getApiKey() {
     try {
       const cfg = JSON.parse(readFileSync(localConfig, "utf8"));
       if (cfg.wind_api_key) return cfg.wind_api_key;
-    } catch { }
+    } catch {}
   }
 
   // 全局 Key 存储位置（与其它 wind 技能可共用）
@@ -288,7 +290,7 @@ function getApiKey() {
     try {
       const env = parseDotenv(readFileSync(globalConfig, "utf8"));
       if (env.WIND_API_KEY) return env.WIND_API_KEY;
-    } catch { }
+    } catch {}
   }
 
   die("KEY_MISSING", "WIND_API_KEY 未配置", {
@@ -567,7 +569,7 @@ function deriveFilenameFromUrl(url, fallback) {
     const u = new URL(url);
     const last = u.pathname.split("/").filter(Boolean).pop();
     if (last) return decodeURIComponent(last);
-  } catch { }
+  } catch {}
   return fallback || "downloaded";
 }
 
@@ -626,29 +628,103 @@ function accumulateDownloadsFromValues(values) {
 }
 
 /**
- * 把累计的下载链接 + 鉴权下载示例打印到 stderr（避免污染 stdout 的
- * agentResult.value 主输出，便于上层管道处理）。
+ * 把单个文件名清洗成跨平台安全的形态：
+ *   - 去掉 Windows / POSIX 禁止的字符：< > : " / \ | ? *
+ *   - 去掉控制字符 (\x00-\x1f)
+ *   - 去掉首尾空白与点（Windows 不允许结尾是 . 或空格）
+ *   - 兜底 "downloaded"
  */
-function printDownloadHints() {
+function sanitizeFilename(name) {
+  let s = String(name || "").trim();
+  s = s.replace(/[\x00-\x1f<>:"/\\|?*]+/g, "_");
+  s = s.replace(/^[\s.]+|[\s.]+$/g, "");
+  return s || "downloaded";
+}
+
+/**
+ * 解决目标目录中的文件名冲突：若已存在，则在 basename 后追加 " (1)", " (2)" …
+ */
+function resolveUniqueTargetPath(dir, filename) {
+  const safe = sanitizeFilename(filename);
+  let candidate = join(dir, safe);
+  if (!existsSync(candidate)) return candidate;
+  const { name, ext } = parsePath(safe);
+  for (let i = 1; i < 1000; i++) {
+    candidate = join(dir, `${name} (${i})${ext}`);
+    if (!existsSync(candidate)) return candidate;
+  }
+  // 极端兜底：拼时间戳
+  return join(dir, `${name}.${Date.now()}${ext}`);
+}
+
+/**
+ * 用 Bearer Token GET 一个文件并写入磁盘。
+ * 成功返回 { ok: true, path }；失败返回 { ok: false, error }，不抛异常。
+ */
+async function downloadOneFile({ url, targetPath, apiKey }) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    });
+  } catch (e) {
+    return { ok: false, error: `网络错误：${e.message}` };
+  }
+
+  if (!response.ok) {
+    let snippet = "";
+    try {
+      const text = await response.text();
+      snippet = text ? `，${text.slice(0, 200)}` : "";
+    } catch {}
+    return {
+      ok: false,
+      error: `HTTP ${response.status} ${response.statusText}${snippet}`,
+    };
+  }
+
+  if (!response.body) {
+    return { ok: false, error: "响应体为空" };
+  }
+
+  try {
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(targetPath));
+    return { ok: true, path: targetPath };
+  } catch (e) {
+    // 写到一半失败：清掉残留再返回
+    try { unlinkSync(targetPath); } catch {}
+    return { ok: false, error: `写入失败：${e.message}` };
+  }
+}
+
+/**
+ * 把累计的下载链接逐个 GET 下载到当前工作目录，并把结果打到 stderr
+ * （避免污染 stdout 的 agentResult.value 主输出）。
+ * 重复调用幂等：调用即清空累计列表。
+ */
+async function downloadCollectedFiles(apiKey) {
   if (collectedDownloads.size === 0) return;
 
   const items = Array.from(collectedDownloads, ([url, filename]) => ({ url, filename }));
-  // 一次性打印，重复调用幂等
   collectedDownloads.clear();
 
-  const lines = [];
-  lines.push("");
-  lines.push(`=== 检测到 ${items.length} 个可下载文件 ===`);
-  for (const { url, filename } of items) {
-    lines.push(`- ${filename}`);
-    lines.push(`  URL: ${url}`);
-  }
-  lines.push("");
-  lines.push("下载方式：HTTP GET，请求头携带 Bearer Token");
-  lines.push("  Authorization: Bearer <WIND_API_KEY>");
-  lines.push("  (WIND_API_KEY 为 Wind AIFin Market 提供的 apiKey)");
+  const cwd = process.cwd();
+  console.error("");
+  console.error(`=== 检测到 ${items.length} 个可下载文件，正在下载到当前目录：${cwd} ===`);
 
-  console.error(lines.join("\n"));
+  for (const { url, filename } of items) {
+    const targetPath = resolveUniqueTargetPath(cwd, filename);
+    const result = await downloadOneFile({ url, targetPath, apiKey });
+    if (result.ok) {
+      console.error(`- ${filename}`);
+      console.error(`  已保存：${result.path}`);
+    } else {
+      console.error(`- ${filename}`);
+      console.error(`  下载失败：${result.error}`);
+      console.error(`  原始 URL：${url}`);
+    }
+  }
 }
 
 export function formatEventOutput(event) {
@@ -718,7 +794,7 @@ async function emitParsedEventsUnlessQuotaStreaming(reader, events) {
     return false;
   } catch (e) {
     if (e instanceof WindTrialQuotaExceeded) {
-      await reader.cancel().catch(() => { });
+      await reader.cancel().catch(() => {});
       process.exitCode = 1;
       return true;
     }
@@ -858,85 +934,85 @@ async function main() {
   const MAX_RETRIES = 10;
 
   try {
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        const delay = Math.min(1000 * attempt, 10000);
-        console.error(
-          `[reconnect] attempt ${attempt}/${MAX_RETRIES}, waiting ${delay}ms...`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-
-      const requestBody =
-        attempt === 0 ? body : resubscribeBody({ params: body });
-
-      let response;
-      try {
-        response = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(requestBody),
-        });
-      } catch (e) {
-        console.error(`[network error] ${e.message}`);
-        if (attempt < MAX_RETRIES) continue;
-        console.error("max retries exceeded");
-        process.exitCode = 1;
-        return;
-      }
-
-      console.log("status:", response.status, response.statusText);
-      console.log(
-        "headers:",
-        Object.fromEntries(response.headers.entries()),
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * attempt, 10000);
+      console.error(
+        `[reconnect] attempt ${attempt}/${MAX_RETRIES}, waiting ${delay}ms...`,
       );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("request failed:");
-        console.error(errorText);
-        if (response.status >= 500 && attempt < MAX_RETRIES) continue;
-        process.exitCode = 1;
-        return;
-      }
+    const requestBody =
+      attempt === 0 ? body : resubscribeBody({ params: body });
 
-      const contentType = (response.headers.get("content-type") || "").toLowerCase();
-      const useSseReader =
-        contentType.includes("text/event-stream") && response.body != null;
-
-      if (useSseReader) {
-        let streamError = null;
-        try {
-          await drainSseStream(response);
-          printDownloadHints();
-          return;
-        } catch (e) {
-          streamError = e;
-        }
-
-        console.error(`[stream error] ${streamError.message}`);
-        if (attempt < MAX_RETRIES) continue;
-        console.error("max retries exceeded");
-        process.exitCode = 1;
-        return;
-      }
-
-      // 非 SSE：可能是 JSON-RPC error、整包 JSON、HTML、或网关误标的 SSE 文本
-      let bodyText;
-      try {
-        bodyText = await response.text();
-      } catch (e) {
-        console.error(`[read body error] ${e.message}`);
-        if (attempt < MAX_RETRIES) continue;
-        console.error("max retries exceeded");
-        process.exitCode = 1;
-        return;
-      }
-
-      consumeNonStreamBody(bodyText);
-      printDownloadHints();
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+      });
+    } catch (e) {
+      console.error(`[network error] ${e.message}`);
+      if (attempt < MAX_RETRIES) continue;
+      console.error("max retries exceeded");
+      process.exitCode = 1;
       return;
     }
+
+    console.log("status:", response.status, response.statusText);
+    console.log(
+      "headers:",
+      Object.fromEntries(response.headers.entries()),
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("request failed:");
+      console.error(errorText);
+      if (response.status >= 500 && attempt < MAX_RETRIES) continue;
+      process.exitCode = 1;
+      return;
+    }
+
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    const useSseReader =
+      contentType.includes("text/event-stream") && response.body != null;
+
+    if (useSseReader) {
+      let streamError = null;
+      try {
+        await drainSseStream(response);
+        await downloadCollectedFiles(apiKey);
+        return;
+      } catch (e) {
+        streamError = e;
+      }
+
+      console.error(`[stream error] ${streamError.message}`);
+      if (attempt < MAX_RETRIES) continue;
+      console.error("max retries exceeded");
+      process.exitCode = 1;
+      return;
+    }
+
+    // 非 SSE：可能是 JSON-RPC error、整包 JSON、HTML、或网关误标的 SSE 文本
+    let bodyText;
+    try {
+      bodyText = await response.text();
+    } catch (e) {
+      console.error(`[read body error] ${e.message}`);
+      if (attempt < MAX_RETRIES) continue;
+      console.error("max retries exceeded");
+      process.exitCode = 1;
+      return;
+    }
+
+    consumeNonStreamBody(bodyText);
+    await downloadCollectedFiles(apiKey);
+    return;
+  }
   } finally {
     maybePrintUpdateNotice();
   }
