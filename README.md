@@ -20,7 +20,12 @@
 | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | [`wind-mcp-skill`](./skills/wind-mcp-skill)                   | **访问万得 Wind 金融数据**：股票（A 股/港股/美股行情与财务）、基金（行情与全维数据）、指数/板块、债券、公司公告与新闻、宏观经济指标 |
 | [`tushare-finance-skill`](./skills/tushare-finance-skill)     | **访问 Tushare Pro 金融数据**：A 股、港股、美股、基金、期货、债券、财务报表与宏观经济指标                                           |
-| [`finance-stream-fetch`](./skills/finance-stream-fetch)       | **金融流式接口调用**：通过本地 Node 脚本向金融 Agent 接口发起 SSE / streamable fetch 请求                                           |
+
+### Agent 类
+
+| Skill                                       | 能力域                                                                                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [`wind-alice`](./skills/wind-alice)         | **Alice 专业金融分析 Agent 入口**：A2A 协议 + SSE 流式，跑 Alice 子 Skill（公司一页纸 / 调研问题清单 / 事实核验 / 财报点评 / 主题选股 / 基金分析 / 宏观、债券、信用分析 / 市场规模测算 / 可比公司分析） |
 
 ### 金融技能类
 
@@ -59,6 +64,7 @@
 
 > `wind-find-finance-skill` 是入口型 meta-skill，不调 MCP server、不需要 API Key。
 > `wind-mcp-skill` 用于访问万得 Wind 金融数据，按数据域分类调用。
+> `wind-alice` 是 Alice 专业金融分析 Agent 入口，跑 Alice 子 Skill 做综合分析，需要 API Key。
 
 ---
 
@@ -105,7 +111,7 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --list
 
 ---
 
-## 🔑 配置 API Key（仅 wind-mcp-skill 需要）
+## 🔑 配置 API Key（wind-mcp-skill / wind-alice 需要）
 
 ### 让 AI 帮你打开开发者中心拿 Key（推荐）
 
@@ -207,7 +213,7 @@ wind-skills/
     ├── wind-find-finance-skill/    ← 入口（无 cli.mjs，纯 SKILL.md + references）
     ├── wind-mcp-skill/             ← 万得 Wind 金融数据访问
     ├── tushare-finance-skill/      ← Tushare Pro 金融数据
-    ├── finance-stream-fetch/       ← 金融流式接口调用
+    ├── wind-alice/                 ← Alice 专业金融分析 Agent
     ├── a-share-primary-theme-identification/
     ├── backtest-expert/
     ├── breakout_candidate_finder_skill/
