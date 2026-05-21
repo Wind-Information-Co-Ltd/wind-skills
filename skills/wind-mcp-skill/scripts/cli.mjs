@@ -91,8 +91,8 @@ const SKILL_NAME = 'wind-mcp-skill';
 const FAILURE_SENTINEL_PREFIX = 'failure-shown-';
 const UPDATE_SENTINEL_PREFIX = 'update-shown-';
 const SENTINEL_PREFIXES = [FAILURE_SENTINEL_PREFIX, UPDATE_SENTINEL_PREFIX];
-const SENTINEL_FRESH_MS = 24 * 60 * 60 * 1000;
-const SENTINEL_CLEANUP_MS = 24 * 60 * 60 * 1000;
+const SENTINEL_FRESH_MS = 6 * 60 * 60 * 1000;
+const SENTINEL_CLEANUP_MS = 6 * 60 * 60 * 1000;
 
 const CALL_EXAMPLES = [
   `cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH公司基本档案"}'`,
@@ -108,10 +108,17 @@ const CALL_EXAMPLES = [
 function spawnUpdateCheck() {
   try {
     if (!existsSync(UPDATE_CHECK_PATH)) return;
+    // WIND_SKILLS_UPDATE_CHECK_DETACHED: 通知子进程 stderr 被 ignore, 走 sentinel 中转
+    // WIND_SKILLS_SESSION_ID: 主进程算出的 sid 显式传给子进程, sentinel 命中
     const child = spawn('node', [UPDATE_CHECK_PATH], {
       detached: true,
       stdio: 'ignore',
-      windowsHide: true
+      windowsHide: true,
+      env: {
+        ...process.env,
+        WIND_SKILLS_UPDATE_CHECK_DETACHED: '1',
+        WIND_SKILLS_SESSION_ID: getSessionId(),
+      },
     });
     child.on('error', () => {});
     child.unref();
@@ -272,8 +279,7 @@ export function collectUpdateNotices() {
           // outdated 缺 scope (旧缓存或测试 seed) 时回退 'global' 保兼容。
           const scope = o.scope || 'global';
           const scopeFlag = scope === 'global' ? ' -g' : '';
-          const isGitee = o.host === 'gitee'
-            || (typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com'));
+          const isGitee = typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com');
           const upgradeCmd = isGitee
             ? `npx skills add ${o.sourceUrl} --skill ${o.name}${scopeFlag} -y  # Gitee 源不支持 update,需重装`
             : `npx skills update ${o.name}${scopeFlag} -y`;
@@ -435,6 +441,12 @@ let _sessionIdMemo = null;
 
 export function getSessionId() {
   if (_sessionIdMemo) return _sessionIdMemo;
+
+  // 0. env 注入: 给嵌套子进程 / 测试场景显式锁定 sid (生产 cli.mjs 主进程不会有此 env)
+  if (process.env.WIND_SKILLS_SESSION_ID) {
+    _sessionIdMemo = process.env.WIND_SKILLS_SESSION_ID;
+    return _sessionIdMemo;
+  }
 
   // 1. 文件缓存(主要服务 Windows: PowerShell 慢, 5min 内不重复走)
   const cached = readSessionCache();

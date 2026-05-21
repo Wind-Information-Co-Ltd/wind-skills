@@ -9,10 +9,11 @@
 //   - v2: 不用 baseline,反查 lock.updatedAt 时刻的真实 commit,精确对比
 // 统一缓存: ~/.cache/wind-aifinmarket/update-state.json (schema v3, 多 skill 共享)
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, openSync, closeSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, openSync, closeSync, statSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SKILL_NAME = basename(dirname(SCRIPT_DIR));
@@ -29,6 +30,11 @@ const TTL_RATE_LIMIT_MS    = 60 * 60 * 1000;
 
 const NETWORK_TIMEOUT_MS = 5_000;
 const INSTALLED_AT_TOLERANCE_MS = 60 * 60 * 1000;
+
+// sentinel 清理: 与 cli.mjs / update-notify.mjs 同步, 一并清 2 种前缀; 阈值 6h
+// (cli.mjs/notify 入口也清, 这里多触发一次保证 find-finance 等无 cli 通路的 skill 也勤清)
+const SENTINEL_PREFIXES = ['failure-shown-', 'update-shown-'];
+const SENTINEL_CLEANUP_MS = 6 * 60 * 60 * 1000;
 
 // ───── 统一缓存读写 ─────
 
@@ -93,16 +99,28 @@ async function writeUnifiedCacheSkill(skillState) {
 }
 
 // baselines 节: 用于 v1 lock 没有 installedAt 时的替代检测
-// key 格式: "<lockPath>:<skillName>:<computedHash>", value: { remoteSha, capturedAt, sourceUrl }
+// key 格式: "<lockPath>:<skillName>:<computedHash>", value: { remoteSha }
+// 升级 skill 会让 installedHash 变 → key 变 → 旧条目残留。writeBaseline 写新 hash 时
+// 顺手清同 (lockPath, skillName) 下不同 hash 的旧 entry, 避免无界累加。
 function readBaseline(key) {
   const full = readUnifiedCache();
   return full.baselines?.[key] || null;
 }
-async function writeBaseline(key, value) {
+async function writeBaseline(key, remoteSha) {
   await withLock(() => {
     const full = readUnifiedCache();
     if (!full.baselines || typeof full.baselines !== 'object') full.baselines = {};
-    full.baselines[key] = { ...value, capturedAt: new Date().toISOString() };
+    // GC: key 结构 <lockPath>:<skillName>:<hash>; skillName / hash 不含 ':',
+    // lockPath 在 Windows 可能含盘符冒号, 所以用 lastIndexOf 切出 hash 前的前缀。
+    // 同前缀但不是当前 key 的 → 同 (lockPath, skillName) 但不同 hash → 删。
+    const lastColon = key.lastIndexOf(':');
+    if (lastColon > 0) {
+      const prefix = key.slice(0, lastColon + 1);
+      for (const k of Object.keys(full.baselines)) {
+        if (k !== key && k.startsWith(prefix)) delete full.baselines[k];
+      }
+    }
+    full.baselines[key] = { remoteSha };
     writeFileSync(CACHE_FILE, JSON.stringify(full, null, 2));
   });
 }
@@ -112,6 +130,22 @@ function cleanupLegacyFiles() {
     const p = join(CACHE_DIR, name);
     try { if (existsSync(p)) unlinkSync(p); } catch {}
   }
+}
+
+// 清 mtime > SENTINEL_CLEANUP_MS 的旧 sentinel (4 种前缀全扫), 与 cli.mjs/notify 一致
+function cleanupStaleSentinels() {
+  try {
+    if (!existsSync(CACHE_DIR)) return;
+    const now = Date.now();
+    for (const name of readdirSync(CACHE_DIR)) {
+      if (!SENTINEL_PREFIXES.some(p => name.startsWith(p))) continue;
+      const p = join(CACHE_DIR, name);
+      try {
+        const st = statSync(p);
+        if (now - st.mtimeMs > SENTINEL_CLEANUP_MS) unlinkSync(p);
+      } catch {}
+    }
+  } catch {}
 }
 
 // ───── lock 签名 ─────
@@ -228,9 +262,95 @@ function normalizeSkillDir(skillPath) {
     .replace(/\/+$/, '');
 }
 
+// ───── 代理 ─────
+
+// 代理来源 (按可靠度排序):
+//   1. process.env (主路径; 沙箱剥 env 时为空)
+//   2. git config http.proxy / https.proxy (持久化兜底, 企业网用户常配)
+// 不读 cli.mjs 写的 hint 文件 - 主进程也可能被剥 env, 那 hint 也是空的, 不如不依赖。
+// 同进程内缓存 git config 结果, 避免每次 fetchJson 都 spawn 一次 git。
+let _gitProxyMemo;
+function loadGitProxy() {
+  if (_gitProxyMemo !== undefined) return _gitProxyMemo;
+  try {
+    const httpsR = spawnSync('git', ['config', '--get', 'https.proxy'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, windowsHide: true });
+    const httpR = spawnSync('git', ['config', '--get', 'http.proxy'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, windowsHide: true });
+    const https = httpsR.error ? '' : (httpsR.stdout || '').trim();
+    const http = httpR.error ? '' : (httpR.stdout || '').trim();
+    if (!https && !http) { _gitProxyMemo = null; return null; }
+    _gitProxyMemo = { HTTPS_PROXY: https || http, HTTP_PROXY: http || https };
+    return _gitProxyMemo;
+  } catch { _gitProxyMemo = null; return null; }
+}
+
+// 按 curl/requests 惯例: HTTPS_PROXY/https_proxy/HTTP_PROXY/http_proxy/ALL_PROXY/all_proxy
+// HTTPS 目标优先 HTTPS_PROXY, HTTP 目标只看 HTTP_PROXY+。NO_PROXY 后缀匹配 (大小写不敏感),
+// '*' 全跳过, '.foo.com' 与 'foo.com' 等价 (匹配自身 + 子域)。
+// env 全空时回落 git config。
+function getProxyForUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const env = process.env;
+  const isHttps = u.protocol === 'https:';
+  const candidates = isHttps
+    ? [env.HTTPS_PROXY, env.https_proxy, env.HTTP_PROXY, env.http_proxy, env.ALL_PROXY, env.all_proxy]
+    : [env.HTTP_PROXY, env.http_proxy, env.ALL_PROXY, env.all_proxy];
+  let proxy = candidates.find(v => typeof v === 'string' && v.trim().length > 0);
+  if (!proxy) {
+    const git = loadGitProxy();
+    if (git) proxy = isHttps ? git.HTTPS_PROXY : git.HTTP_PROXY;
+  }
+  if (!proxy) return null;
+  const noProxy = env.NO_PROXY || env.no_proxy;
+  if (noProxy) {
+    const host = u.hostname.toLowerCase();
+    for (const raw of noProxy.split(',')) {
+      const e = raw.trim().toLowerCase();
+      if (!e) continue;
+      if (e === '*') return null;
+      const norm = e.replace(/^\./, '');
+      if (host === norm || host.endsWith('.' + norm)) return null;
+    }
+  }
+  return proxy.trim();
+}
+
+// curl 子进程的 env: 本进程 env 缺代理时, 从 git config 补, 让 curl 能拿到
+function buildCurlEnv() {
+  const merged = { ...process.env };
+  const env = process.env;
+  const hasEnvProxy = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy
+                      || env.ALL_PROXY || env.all_proxy;
+  if (hasEnvProxy) return merged;
+  const git = loadGitProxy();
+  if (!git) return merged;
+  if (git.HTTPS_PROXY) merged.HTTPS_PROXY = git.HTTPS_PROXY;
+  if (git.HTTP_PROXY) merged.HTTP_PROXY = git.HTTP_PROXY;
+  return merged;
+}
+
 // ───── HTTP ─────
 
+// curl 优先: Linux / macOS / Windows10+ (build 17063+) 自带, 自动读 HTTPS_PROXY /
+// HTTP_PROXY / NO_PROXY env (本进程 env 缺时 buildCurlEnv 从 git config 兜底)。
+// 默认 -k 跳过 TLS 证书验证: update-check 只 GET 公开 JSON 不传凭证, 接受 MITM 网关换签场景。
+//
+// 静默降级: 走代理 network 失败 → curl --noproxy '*' 静默重试; 直连成功就用直连结果,
+// 不给用户加任何"代理失败"提示 (wind-skills stderr 只出"是否有新版"这一条)。
+// curl 不在 PATH → 降级 Node fetch (无代理), 静默。
 async function fetchJson(url) {
+  const curlResult = fetchJsonViaCurl(url, { noProxy: false });
+  if (curlResult.code !== 'curl_missing') {
+    if (curlResult.error === 'network' && getProxyForUrl(url)) {
+      const direct = fetchJsonViaCurl(url, { noProxy: true });
+      if (direct.error !== 'network' && direct.code !== 'curl_missing') return direct;
+    }
+    return curlResult;
+  }
+
+  // curl 不在 PATH: Node fetch (不走代理, 静默)
   try {
     const resp = await fetch(url, {
       headers: { 'User-Agent': `${SKILL_NAME}-update-check` },
@@ -246,6 +366,48 @@ async function fetchJson(url) {
     return { data: await resp.json() };
   } catch (e) {
     return { error: e?.name === 'TimeoutError' ? 'timeout' : 'network' };
+  }
+}
+
+// curl 子进程: 同步 spawnSync (update-check 一次性脚本, 阻塞无副作用)
+// -k 默认开: update-check 只 GET 公开 JSON 不带 Authorization, MITM 投毒最多让用户漏报新版,
+//   不会让其执行恶意代码 → 跳过 TLS 验证以兼容公司 MITM 代理换签场景。
+// -w 把 HTTP 状态码追加到 stdout 末尾, 用 marker 切分 body / status。
+// noProxy: 走 --noproxy '*' (降级直连重试用)。curl 不在 PATH → { code: 'curl_missing' }。
+function fetchJsonViaCurl(url, { noProxy = false } = {}) {
+  const MARKER = '\n__HTTP_CODE__';
+  try {
+    const args = [
+      '-sS', '-k',
+      '--max-time', String(Math.ceil(NETWORK_TIMEOUT_MS / 1000)),
+      '-A', `${SKILL_NAME}-update-check`,
+      '-H', 'Accept: application/json',
+      '-w', `${MARKER}%{http_code}`,
+    ];
+    if (noProxy) args.push('--noproxy', '*');
+    args.push(url);
+    // env 注入: 本进程 env 可能被沙箱剥了, buildCurlEnv 从 git config 补
+    const result = spawnSync('curl', args, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      env: buildCurlEnv(),
+    });
+
+    if (result.error && result.error.code === 'ENOENT') return { code: 'curl_missing' };
+    if (result.error) return { error: 'network' };
+
+    const out = result.stdout || '';
+    const idx = out.lastIndexOf(MARKER);
+    if (idx < 0) return { error: 'network' };  // curl 连接前异常退出 (DNS/拨号)
+    const body = out.slice(0, idx);
+    const code = Number(out.slice(idx + MARKER.length).trim());
+    if (!code) return { error: 'network' };
+    // 403/429 一律视为 rate_limit (curl 没传 -D 抓 header, 牺牲 x-ratelimit-remaining 精度)
+    if (code === 403 || code === 429) return { error: 'rate_limit' };
+    if (code < 200 || code >= 300) return { error: `http_${code}` };
+    try { return { data: JSON.parse(body) }; }
+    catch { return { error: 'shape' }; }
+  } catch {
+    return { error: 'network' };
   }
 }
 
@@ -306,8 +468,7 @@ function shortHash(h) {
 export function buildUpgradeCommand(o) {
   const scope = o.scope || 'global';
   const scopeFlag = scope === 'global' ? ' -g' : '';
-  const isGitee = o.host === 'gitee'
-    || (typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com'));
+  const isGitee = typeof o.sourceUrl === 'string' && o.sourceUrl.includes('gitee.com');
   return isGitee
     ? `npx skills add ${o.sourceUrl} --skill ${o.name}${scopeFlag} -y  # Gitee 源不支持 update,需重装`
     : `npx skills update ${o.name}${scopeFlag} -y`;
@@ -341,6 +502,7 @@ function printNotice(state) {
 
 async function main() {
   cleanupLegacyFiles();
+  cleanupStaleSentinels();
 
   const fullCache = readUnifiedCache();
   const myCache = fullCache.skills[SKILL_NAME] || null;
@@ -370,7 +532,7 @@ async function main() {
     //    从 source 短形式启发式生成 GitHub/Gitee 两个候选, 试到能拉 tree 的那个为准
     const urlCandidates = deriveSourceUrlCandidates(entry);
     if (urlCandidates.length === 0) {
-      unknownDetails.push({ reason: 'no_source_url', lockPath, source: entry.source });
+      unknownDetails.push({ reason: 'no_source_url' });
       continue;
     }
 
@@ -397,16 +559,16 @@ async function main() {
     if (rateLimited) break;
     if (!parsed || !currentTree) {
       if (lastError) {
-        transientError = { reason: lastError, sourceUrl: urlCandidates[0] };
+        transientError = { reason: lastError };
       } else {
-        unknownDetails.push({ reason: 'unsupported_host', lockPath, source: entry.source });
+        unknownDetails.push({ reason: 'unsupported_host' });
       }
       continue;
     }
 
     const currentSha = findSkillSha(currentTree, skillDir);
     if (!currentSha) {
-      unknownDetails.push({ reason: 'path_missing', lockPath, sourceUrl, skillPath: entry.skillPath });
+      unknownDetails.push({ reason: 'path_missing' });
       continue;
     }
 
@@ -417,18 +579,18 @@ async function main() {
       const installCommit = await fetchCommitAtTime(parsed, ref, skillDir, installedAt);
       if (installCommit.error) {
         if (installCommit.error === 'rate_limit') { rateLimited = true; break; }
-        unknownDetails.push({ reason: `commit_lookup_${installCommit.error}`, lockPath, sourceUrl });
+        unknownDetails.push({ reason: `commit_lookup_${installCommit.error}` });
         continue;
       }
       const installedTreeResult = await fetchTreeBySha(parsed, installCommit.sha);
       if (installedTreeResult.error) {
         if (installedTreeResult.error === 'rate_limit') { rateLimited = true; break; }
-        transientError = { reason: installedTreeResult.error, sourceUrl, host: parsed.host };
+        transientError = { reason: installedTreeResult.error };
         continue;
       }
       const installedSha = findSkillSha(installedTreeResult.tree, skillDir);
       if (!installedSha) {
-        unknownDetails.push({ reason: 'path_missing_at_install', lockPath, sourceUrl });
+        unknownDetails.push({ reason: 'path_missing_at_install' });
         continue;
       }
       if (currentSha === installedSha) continue;
@@ -436,7 +598,7 @@ async function main() {
         name: SKILL_NAME,
         current: shortHash(installedSha),
         latest: shortHash(currentSha),
-        sourceUrl, host: parsed.host,
+        sourceUrl,
         installedHash: entry.skillFolderHash || entry.computedHash || null,
         scope,
       });
@@ -449,7 +611,7 @@ async function main() {
       const baseline = readBaseline(baselineKey);
       if (!baseline) {
         // 首次捕获: 静默存 baseline, 报 up_to_date (此 entry 视为最新)
-        await writeBaseline(baselineKey, { remoteSha: currentSha, sourceUrl });
+        await writeBaseline(baselineKey, currentSha);
         continue;
       }
       if (baseline.remoteSha === currentSha) continue;  // 远端未变, up_to_date
@@ -458,7 +620,7 @@ async function main() {
         name: SKILL_NAME,
         current: shortHash(baseline.remoteSha),
         latest: shortHash(currentSha),
-        sourceUrl, host: parsed.host,
+        sourceUrl,
         installedHash,
         scope,
       });
@@ -491,7 +653,6 @@ async function main() {
     const state = {
       status: 'transient_error',
       reason: transientError.reason,
-      sourceUrl: transientError.sourceUrl,
       ttlMs: TTL_TRANSIENT_MS,
       lockSignature,
     };
@@ -503,7 +664,6 @@ async function main() {
   const state = {
     status: 'unknown',
     reason: unknownDetails[0].reason,
-    details: unknownDetails,
     ttlMs: TTL_UNKNOWN_MS,
     lockSignature,
   };
