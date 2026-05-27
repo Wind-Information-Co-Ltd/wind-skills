@@ -1,5 +1,6 @@
 {
   "stock_data": [
+    "search_stocks",
     "get_stock_price_indicators",
     "get_stock_kline",
     "get_stock_quote",
@@ -11,6 +12,7 @@
     "get_risk_metrics"
   ],
   "global_stock_data": [
+    "search_global_stocks",
     "get_global_stock_price_indicators",
     "get_global_stock_kline",
     "get_global_stock_quote",
@@ -22,6 +24,7 @@
     "get_global_stock_risk_metrics"
   ],
   "fund_data": [
+    "search_funds",
     "get_fund_price_indicators",
     "get_fund_kline",
     "get_fund_quote",

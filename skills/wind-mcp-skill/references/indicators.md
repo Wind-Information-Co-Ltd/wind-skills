@@ -1,13 +1,10 @@
-# 行情指标字段表 (`indexes` 参数取值)
+# Wind 指标 / 字段名词典（`indexes` 等指标类入参取值）
 
-**适用工具**:
+> 何时读：入参需要填写 Wind 指标 / 字段名时（如 `indexes`），每次都核对 | 权威于：Wind 指标 / 字段名词典 | 不覆盖：自然语言字段 `question` / `query` / `metricIdsStr`
 
-- `get_stock_price_indicators` (A 股)
-- `get_global_stock_price_indicators` (港股 / 美股)
-- `get_fund_price_indicators` (基金 / ETF)
-- `get_index_price_indicators` (指数 / 板块)
-
-四个工具的 `indexes` 取值**完全相同**(后端共用一份中文字段词典)。本表是**唯一权威清单**,不在表内的字段不要传。
+本表是 Wind 指标 / 字段名的**唯一权威词典**。凡入参需要填写指标 / 字段名的调用都以本表为准——
+最常见是 `*_price_indicators` 工具的 `indexes` 参数（股票 / 港美股 / 基金 / 指数共用同一份词典），
+但**不限于此**。每次构造这类参数都回本表逐字核对；表内没有的字段不要传，不要凭记忆或猜拼写。
 
 ## 怎么用
 
@@ -222,7 +219,6 @@ node scripts/cli.mjs call index_data get_index_price_indicators \
 
 | 字段 |
 |---|
-| `超大单净流入额(万元)` `大单净流入额(万元)` `中单净流入额(万元)` `小单净流入额(万元)` |
 | `连红天数` `当日主力净流入额` `当日主力净流入占比` |
 | `近5日主力净流入额` `近5日主力净流入占比` `近5日主力净流入天数` |
 | `近10日主力净流入额` `近10日主力净流入占比` `近10日主力净流入天数` |

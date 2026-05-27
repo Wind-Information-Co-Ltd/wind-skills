@@ -5,12 +5,12 @@
 ---
 
 ## 这是什么
-
+ 
 通过 MCP 协议访问万得 Wind 金融数据库，给 AI Agent 提供：
 
-- A 股股票行情（最新价 / K 线 / 分钟）+ 财务基本面（财报 / 股本 / 事件 / 技术指标 / 风险）
-- 港股 / 美股股票行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险）
-- ETF / 公募基金行情 + 全维数据（档案 / 财务 / 持仓 / 业绩 / 持有人 / 管理公司）
+- A 股股票筛选 + 行情（最新价 / K 线 / 分钟）+ 财务基本面（财报 / 股本 / 事件 / 技术指标 / 风险）
+- 港股 / 美股股票筛选 + 行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险）
+- ETF / 公募基金筛选 + 行情 + 全维数据（档案 / 财务 / 持仓 / 业绩 / 持有人 / 管理公司）
 - 指数 / 板块行情 + 档案 / 基本面（成份股加权 PE / PB / PS）/ 技术指标
 - 债券基本档案 / 发债主体 / 行情估值（久期 / 凸性 / 利差）/ 主体财务
 - 上市公司公告 + 财经新闻 RAG
@@ -73,7 +73,10 @@ npx skills update wind-mcp-skill -g -y
 npx skills update wind-mcp-skill -y
 ```
 
-call 命令调用时,如果检测到新版,stderr 会出现 `[wind-skills] 检测到新版可用` 段落,**`升级命令:` 那一行已经按你的安装位置选好 `-g` 与否**,直接照搬执行即可。
+call 命令调用时会触发后台自动更新检查。每天首次使用时异步执行一次
+`npx skills update wind-mcp-skill -y`；如果当前 skill 位于全局
+`~/.agents/skills` 下，则自动追加 `-g`。执行结果写入当前 skill 根目录的
+`update-state.json`；当天后续调用不会再次执行，且不会阻塞正常取数。
 
 ---
 
@@ -87,7 +90,7 @@ wind-mcp-skill/
 │   └── tool-manifest.json       # CLI 前置校验的 server_type / tool_name 权威清单
 ├── scripts/
 │   ├── cli.mjs                  # MCP 调用主入口
-│   └── update-check.mjs         # 升级感知探活
+│   └── update-check.mjs         # 每日一次后台自动更新
 └── README.md
 ```
 

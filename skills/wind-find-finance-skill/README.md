@@ -11,7 +11,7 @@
 - 用户问"有什么金融能力" / 提了金融问题但 AI 不确定用哪个 → 触发本 skill
 - AI 读 `references/skills-catalog.md` → 列举平台所有可用 skill（数据发现 + 金融分析两类）
 - 给出对应安装命令，让用户自助挑装
-- 可运行 `scripts/update-check.mjs` 按 lock-driven 方式检查是否有新版，并提示升级。
+- 可运行 `scripts/update-check.mjs` 按 lock-driven 方式非阻塞触发静默自更新。
 
 ---
 
@@ -39,11 +39,11 @@ wind-find-finance-skill/
 ├── references/
 │   └── skills-catalog.md            # 平台 skill 清单本地副本
 ├── scripts/
-│   ├── update-check.mjs             # 更新探活与提醒
+│   ├── update-check.mjs             # 非阻塞触发静默自更新检查
 └── README.md
 ```
 
-**没有数据 cli.mjs**——LLM 主要用 Read 处理；`scripts/update-check.mjs` 只负责更新提醒。
+**没有数据 cli.mjs**——LLM 主要用 Read 处理；`scripts/update-check.mjs` 只负责非阻塞触发静默更新检查。
 
 ---
 
@@ -63,7 +63,7 @@ AI 加载 SKILL.md 后按守则操作：
 
 1. Read `references/skills-catalog.md` → 拿本地清单
 2. 按用户问题筛 1-3 个相关 skill 列出（含安装命令）
-3. 运行 `node scripts/update-check.mjs` → 脚本从 lock 读取来源与 hash；若 stderr 出现 `[wind-skills]` 更新提示，会话首次转告用户
+3. 运行 `node scripts/update-check.mjs` → 立即后台启动更新检查；后台副本按 `wind-mcp-skill` 同类机制读取 lock、检查远端 HEAD、静默自更新；失败完全静默。
 
 ---
 
@@ -77,7 +77,7 @@ npx skills update wind-find-finance-skill -g -y
 npx skills update wind-find-finance-skill -y
 ```
 
-跑 `node scripts/update-check.mjs` 时, stderr 输出的 `升级命令：` 那一行已按你的安装位置自动选好 `-g` 与否, 直接照搬即可。
+`node scripts/update-check.mjs` 会非阻塞触发静默更新检查并写入本地状态，不输出升级提醒。
 
 `references/skills-catalog.md` 随 skill 包一起更新。
 
@@ -87,7 +87,7 @@ npx skills update wind-find-finance-skill -y
 
 - **轻代码**：核心推荐仍是 markdown + AI 工具能力；Node.js 脚本只做更新提醒
 - **跨 agent 通用**：只要 agent 让 LLM 能 Read 文件 + WebFetch URL 即可
-- 仅写 `~/.cache/wind-aifinmarket/update-state.json`（多 skill 共享统一缓存），不写业务数据
+- 仅写当前 skill 的 `scripts/update-state.json` 与临时锁文件，不写业务数据
 - **平台版本号** 由我们维护，跟 skill 自身 frontmatter version 解耦；改了 monorepo 哪个 skill 就把 skill.md 那一行 +1
 
 ---

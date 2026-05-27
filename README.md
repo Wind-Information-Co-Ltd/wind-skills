@@ -1,6 +1,6 @@
 # wind-skills
 
-> **Wind 万得金融 Skill 集合（monorepo）** · 通过 MCP 协议把万得金融数据接入 Claude / OpenClaw / Hermes 等 AI Agent，并一站式收录 wind 自家数据 + 社区分析工作流共 34 个金融 skill
+> **Wind 万得金融 Skill 集合（monorepo）** · 通过 MCP 协议把万得金融数据接入 Claude / OpenClaw / Hermes 等 AI Agent，并一站式收录 wind 自家数据 + 社区分析工作流共 36 个金融 skill
 
 [![GitHub](https://img.shields.io/badge/GitHub-Wind--Information--Co--Ltd%2Fwind--skills-blue?logo=github)](https://github.com/Wind-Information-Co-Ltd/wind-skills)
 
@@ -19,6 +19,8 @@
 | Skill                                                     | 能力域                                                                                                                              |
 | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | [`wind-mcp-skill`](./skills/wind-mcp-skill)                   | **访问万得 Wind 金融数据**：股票（A 股/港股/美股行情与财务）、基金（行情与全维数据）、指数/板块、债券、公司公告与新闻、宏观经济指标 |
+| [`ifind-finance-data`](./skills/ifind-finance-data)           | **访问同花顺 iFinD 金融数据**：股票、基金、宏观经济、行业经济、新闻公告，支持智能选股/选基                                          |
+| [`mx-finance-data`](./skills/mx-finance-data)                 | **访问东方财富金融数据**：A 股/港股/美股、基金、债券等多资产行情与财务，输出 xlsx                                                   |
 | [`tushare-finance-skill`](./skills/tushare-finance-skill)     | **访问 Tushare Pro 金融数据**：A 股、港股、美股、基金、期货、债券、财务报表与宏观经济指标                                           |
 
 ### Agent 类
@@ -212,6 +214,8 @@ wind-skills/
 └── skills/                         ← 所有 skill 直接平铺，对齐 npx skills 协议
     ├── wind-find-finance-skill/    ← 入口（无 cli.mjs，纯 SKILL.md + references）
     ├── wind-mcp-skill/             ← 万得 Wind 金融数据访问
+    ├── ifind-finance-data/         ← 同花顺 iFinD 金融数据
+    ├── mx-finance-data/            ← 东方财富金融数据
     ├── tushare-finance-skill/      ← Tushare Pro 金融数据
     ├── wind-alice/                 ← Alice 专业金融分析 Agent
     ├── a-share-primary-theme-identification/

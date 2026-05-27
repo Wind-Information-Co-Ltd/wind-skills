@@ -1,32 +1,24 @@
 {
-  "schema_version": 2,
-  "description": "wind-mcp-skill CLI 错误码字典。每条 code 对应一段 agent_action（诊断 + 行动一体）。CLI 内置同一份映射,运行时不依赖本文件;本文件作为开发者参考与监控/集成的码表。",
+  "schema_version": 4,
+  "description": "wind-mcp-skill CLI 错误码字典。每条 code 对应一段 agent_action（诊断 + 行动一体）。CLI 运行时读取本文件;本文件也是开发者参考与监控/集成的唯一码表。",
   "envelope_contract": {
     "success": "成功路径不返回 envelope,直接 stdout 输出纯数据。call 命令透传 result.content[0].text(JSON 字符串则 parse 后输出)；其它命令直接输出结构化对象;help 输出 USAGE 纯文本。exit code 0。",
-    "failure": "失败路径返回 envelope: { ok: false, error: { code, agent_action }, notices }。exit code 1。agent 用 exit code 判断成功/失败,失败时按 error.code 分支处理 + 按 error.agent_action 执行。"
+    "failure": "失败路径返回 envelope: { ok: false, error: { code, agent_action } }。exit code 1。agent 用 exit code 判断成功/失败；失败时直接执行 agent_action 即可。"
   },
   "codes": {
-    "USAGE_ERROR": "命令用法不正确。按 agent_action 中嵌入的 USAGE 重新构造命令。",
-    "INVALID_PARAMS_JSON": "call 第三参数 JSON 解析失败。按 shell 转义规则修正后重试同一 server_type + tool_name,不要换工具。",
-    "UNKNOWN_SERVER_TYPE": "server_type 不在可用列表内。读 USAGE 或 SKILL.md 重选。",
-    "UNKNOWN_TOOL_NAME": "tool_name 不属于该 server_type。读 references/tool-manifest.json 查合法 tool 清单,按 SKILL.md 意图路由规则重选,不要 fallback 到 analytics_data。",
-    "TOOL_MANIFEST_INVALID": "本地工具清单缺失或非法 JSON。提示用户重装 skill。",
-    "UNKNOWN_SCOPE": "setup-key 缺 --scope 或 scope 非法。先 AskUserQuestion 询问用户后带 --scope <global|skill> 重试。",
-    "OPEN_PORTAL_FAILED": "本地无法启动浏览器。把 agent_action 中的 url 告知用户手动打开。",
-    "PARAM_VALIDATION_ERROR": "后端参数验证失败。按 SKILL.md 工具表和 references/indicators.md 逐字段核对后重试;多次失败且属于结构化取数可改用 analytics_data。",
-    "CONFIG_WRITE_ERROR": "配置文件写入失败。检查路径权限或换 scope。",
-    "KEY_MISSING": "WIND_API_KEY 未配置。立即执行 cli.mjs open-portal,获取 Key 后执行 setup-key,再重试原调用。不要换 analytics_data 绕过。",
-    "KEY_INVALID": "API Key 无效或过期。让用户重新生成,setup-key 配置后重试。",
-    "KEY_FORBIDDEN_SERVER": "Key 没有该 server 权限。让用户在开发者中心确认权限。",
-    "RATE_LIMIT_DAILY": "日额度用尽。等次日刷新或换 Key。",
-    "RATE_LIMIT_QPS": "QPS 限流。等 3-5 秒后原样重试。",
-    "BALANCE_INSUFFICIENT": "余额不足。提示用户充值或换 Key。",
-    "NETWORK_ERROR": "网络/DNS/代理/超时/沙箱拦截。修复后原样重试。",
-    "SERVER_5XX": "后端服务异常。稍后原样重试,或降低请求复杂度。",
-    "RESPONSE_PARSE_ERROR": "后端响应格式异常。保留原文联系万得支持。",
-    "NO_RESULTS": "命中数据为空。调整关键词重试;专项无果且属结构化取数可改用 analytics_data。",
-    "MCP_PROTOCOL_ERROR": "MCP 协议层错误。能明确修正请求形态则修正,否则保留原文联系支持。",
-    "TOOL_RUNTIME_ERROR": "后端工具运行错误。检查请求规模/字段口径/数据覆盖,不能修正则停止。",
-    "UNKNOWN": "未知错误。不要盲目重试;读原文定位问题,无法定位则保留原文告知用户并停止。"
+    "TEMPORARILY_UNAVAILABLE": "后端偶发不可用。原样重试一次即可，可能是临时波动。重试仍失败则告知用户稍后再试，不得修改参数、工具或路由。",
+    "INVALID_PARAM_NAME": "后端参数名错误：请求中包含不存在的字段或缺少必填字段。1) 读取 references/tool-contracts.md 当前工具段落，逐项核对字段名是否与文档完全一致；2) 检查是否遗漏必填字段；3) 只修 detail 指出的字段名问题，保持同一 server_type+tool_name 和其他参数不变。禁止改 shell 引号、发明字段名或切换工具。",
+    "INVALID_PARAM_VALUE": "后端参数值错误：字段名正确但值不合法。1) 读取 references/tool-contracts.md 当前工具段落，核对 detail 指出字段的值域要求（日期格式 yyyyMMdd、枚举值、windcode 格式等）；2) 含 indexes 时读取 references/indicators.md 相关类别，逐字核对；3) 只修 detail 指出的值问题，保持同一 server_type+tool_name 和其他参数不变。禁止改字段名、shell 引号或切换工具。",
+    "USAGE_ERROR": "命令用法错误。确认命令格式为 cli.mjs call <server_type> <tool_name> '<params_json>'，修正后重试。只修 CLI 形态，保持 server/tool/params 语义不变。",
+    "INVALID_PARAMS_JSON": "命令传递错误：第三参数 JSON 解析失败。1) 按 SKILL.md「params JSON 写法」表核对当前 shell / 执行器的引号写法；2) 用同一执行路径运行 argv 探针：node -e \"JSON.parse(process.argv[1]); console.log(process.argv[1])\" '<params_json>'；3) 探针通过后，最终 CLI 调用的第三参数必须逐字符复用探针通过的 params_json。只修 JSON 字符串/引号/执行器转义；禁止改字段、日期、indexes、question 或工具。",
+    "ROUTE_ERROR": "路由错误：server_type 或 tool_name 不合法。detail 中列出了可用选项。1) 根据 detail 中的可用列表，结合 SKILL.md 范围表重选合法的 server_type；2) 读取 references/tool-contracts.md 对应 server_type 的工具列表，重选合法的 tool_name；3) 保持用户原始数据意图，不要直接 fallback 到 analytics_data。",
+    "PARAM_VALIDATION_ERROR": "业务参数错误：本地基础校验或后端参数校验未通过。1) 读取 references/tool-contracts.md 当前工具的段落，逐项核对字段名、必填项、日期格式（yyyyMMdd）、单标的和枚举值；2) 含 indexes 时读取 references/indicators.md 相关类别，每个 index 必须逐字存在；3) 只修 detail 指出的错误项，保持同一 server_type+tool_name 和业务参数语义。禁止改 shell 引号、添加用户未请求的指标、发明字段名或直接上 analytics。",
+    "AUTH_ERROR": "认证错误。detail 中有具体原因，分两种情况处理：1) Key 未配置（detail 含'未配置'）：先问用户选择——由 agent 执行 node scripts/cli.mjs open-portal 打开开发者中心，还是用户自行获取 Key；拿到 Key 后问用户选 global 还是 skill scope，执行 node scripts/cli.mjs setup-key <KEY> --scope <global|skill>，再原样重试失败的调用；2) Key 无效或过期（detail 含 HTTP 401）：让用户到开发者中心重新生成 Key，用 setup-key 配置后原样重试。不得换工具/路由绕过。",
+    "QUOTA_ERROR": "额度/限流错误。detail 中有具体原因，分三种情况处理：1) 日额度用完（detail 含'超限'或'daily'）：告知用户等次日 0 点额度刷新后重试，或换有额度的备用 Key；2) QPS 限流（detail 含'频繁'或'qps'或 HTTP 429）：等 3-5 秒后原样重试同一请求；3) 余额不足（detail 含'余额'或'充值'）：告知用户到开发者中心充值，或换有余额的 Key。不得换工具/路由绕过。保持同一 server_type+tool_name 和参数。",
+    "NETWORK_ERROR": "网络/后端错误。detail 中有具体原因和 HTTP 状态码，分两种情况处理：1) 网络连接失败（detail 含 DNS/超时/代理/ECONNREFUSED）：检查本机网络和联网权限，修复后原样重试同一请求；2) 后端 HTTP 5xx（detail 含 HTTP 500/502/503/504）：先按 references/tool-contracts.md 当前工具段落核对 params key/value（必填、日期、枚举、单标的、indexes），入参有错只修该错重试一次；入参无误则稍后原样重试。不得改业务参数或路由。保持同一 server_type+tool_name。",
+    "TOOL_RUNTIME_ERROR": "后端工具运行错误。detail 中有后端返回的原文。按以下顺序处理：1) 看 detail 是否明确指出问题——请求过大、字段不支持、数据未覆盖等；2) 若能明确定位原因，只修对应项重试一次（如缩小时间范围、减少 indexes、换字段）；3) 若 detail 是泛化提示（如'服务暂不可用'或'工具执行失败'），按 references/tool-contracts.md 当前工具段落核对 params key/value 后重试一次；4) 无法定位则告知用户后端原文并停止。不得切换工具、改 shell 引号或扩展指标。",
+    "NO_RESULTS": "数据结果为空：后端执行成功但未匹配到数据。保持同一 server_type、tool_name 和用户意图，只可调整关键词、时间范围或粒度中与原问题直接相关的一项，最多重试一次。仍无结果时按路由顺序尝试 analytics_data 兜底或 wind-alice 最终兜底（先问用户）。禁止编造值或用常识补全。",
+    "SETUP_ERROR": "本地配置/环境错误，发生在 setup-key 或 open-portal 过程中。detail 中有具体原因和路径，分三种情况处理：1) scope 不合法（detail 含'scope'）：问用户选择 global（全局共享）或 skill（仅当前 skill），带 --scope <global|skill> 重试 setup-key；2) 配置写入失败（detail 含'写入失败'或路径）：detail 中有目标路径，检查路径权限，或建议用户换另一个 scope 重试；3) 浏览器无法打开（detail 含'浏览器'或'URL'）：把 detail 中的 URL 告知用户，让用户手动在浏览器中打开。不要改数据查询。",
+    "UNKNOWN": "未知错误。detail 中有后端原文或异常信息。尝试从 detail 识别属于哪个已知错误域：命令传递→检查 JSON 格式；业务参数→检查字段名和值；认证→检查 Key；网络→检查连接。能定位则只在该域修复并重试一次；无法定位则告知用户 detail 原文并停止。"
   }
 }

@@ -23,8 +23,8 @@ Using "<英文 Skill 名>" skill:<原 prompt>
 
 - `--skill` **同时支持中文名和英文名**，不是 id。例如下列写法等价：
   - `--skill "上市公司调研问题清单"` （中文 nameZh）
-  - `--skill "Stock DD List"`            （英文 nameEn）
-  - `--skill "stock-dd-list"`            （英文模糊：忽略大小写/空格/`-_`）
+  - `--skill "Stock DD List"` （英文 nameEn）
+  - `--skill "stock-dd-list"` （英文模糊：忽略大小写/空格/`-_`）
 - 命中后 CLI **统一回填英文名**拼入文本前缀（服务端按英文识别 Skill）。
 - 未在 `KNOWN_SKILLS` 中登记的名称会以 `[warn]` 提示，但仍按字面值拼接前缀提交（portal 上新建/改名的 Skill 也能立刻使用）。
 
@@ -89,18 +89,28 @@ node scripts/wind-alice.mjs --prompt "<USER_QUESTION>" --skill "<英文 Skill �
 
 许多 Skill（公司一页纸 / 调研问题清单 / 季报点评 / 市场规模测算 / 可比公司分析 等）的 `agentResult.value` 末尾会附一个可下载文件链接。
 
-CLI 在每次调用结束时会自动扫描 value 中的可下载文件链接，**直接用 `WIND_API_KEY` 作 Bearer Token 下载到当前工作目录**，并把下载结果（已保存路径或失败原因）打到 **stderr**：
+CLI 在每次调用结束时会自动扫描 value 中的可下载文件链接，**直接用 `WIND_API_KEY` 作 Bearer Token 下载到 `.agents/download/` 目录**，并把下载结果（已保存路径或失败原因）打到 **stderr**：
 
 ```text
-=== 检测到 1 个可下载文件，正在下载到当前目录：<cwd> ===
+=== 检测到 1 个可下载文件，正在下载到：<目标目录> ===
 - <文件名>
-  已保存：<cwd>\<文件名>
+  已保存：<目标目录>\<文件名>
 ```
+
+**下载目录解析规则（按优先级）**：
+
+1. **用户级**：若本 skill 安装在 `%USERPROFILE%\.agents`（POSIX 下为 `~/.agents`）之下（典型如 `~/.agents/skills/wind-alice`），下载到 `%USERPROFILE%\.agents\download\`。
+2. **项目级**：否则从 skill 所在目录沿目录向上查找最近的、含有 `.agents/` 子目录的祖先目录 `P`，下载到 `P\.agents\download\`（典型如 `<项目根>\.agents\download\`）。
+3. **兜底（用户级）**：上述都未命中（例如 skill 处于 SVN/Git 源码开发目录、且没人建过项目级 `.agents`），**统一兜底到用户级 `%USERPROFILE%\.agents\download\`**——即与规则 1 同一物理目录。CLI **不会**再把文件散落到 `process.cwd()`。
+
+无论命中哪一条，目录不存在时 CLI 都会按 recursive 方式自动创建，无需用户手工 `mkdir`；只有当 mkdir 因权限/磁盘等原因失败时，才会作为最终兜底退回 `process.cwd()`，并在 stderr 打 `[warn]` 提示。
+
+记忆点：**所有 Alice 下载的文件，要么在某个 `<...>/.agents/download/` 下，要么在 `~/.agents/download/` 下**，可以稳定地"按目录找文件"。
 
 **重要事实**：
 
 1. 文件接口与 Agent 接口 **共用同一份 `WIND_API_KEY`**（即万得 AIFin Market 提供的 apiKey），CLI 内部自带 `Authorization: Bearer <WIND_API_KEY>` 走 HTTP GET 下载。
-2. 下载目标目录是用户**当前命令执行所在目录**（`process.cwd()`）；同名文件冲突会自动追加 ` (1)`、` (2)` 等后缀，不会覆盖已有文件。
+2. 同名文件冲突会自动追加 ` (1)`、` (2)` 等后缀，不会覆盖已有文件。
 3. CLI **不会把 Key 打印到日志**；下载结果只出现在 stderr，不会污染 stdout 的 `agentResult.value` 主体。
 4. 下载失败（401 / 403 / 网络异常等）只会打印失败原因 + 原始 URL，不影响主流程退出码。
 
@@ -118,10 +128,11 @@ CLI 在每次调用结束时会自动扫描 value 中的可下载文件链接，
 6. **耗时预期与耐心提示**：调用前须提醒用户 Alice Skill 可能较慢；执行中不得因等待过久而中断 CLI、改走其它工具或并行重复调用同一任务。
 7. **不要凭空构造 `selectedSkillIds` / `agentCard` 之类的旧字段去指定 Skill** — 已实测不生效，必须走文本前缀。
 
+## 更新检查处理
 
-## 更新提示处理
+每次有效调用 `wind-alice.mjs` 结束后，脚本会静默触发后台更新检查：
 
-每次调用 wind-alice.mjs 后，留意 stderr 是否包含 `[wind-skills]` 前缀的提示。
-
-- **检测到新版**（`检测到新版可用`）：同一会话首次看到时必须转告用户一次（同会话再次调用不重复）；把清单和 `升级命令：` 那一行完整带给用户。**命令是否带 `-g` 由脚本按 lock 来源自动决定**（global 装的带 `-g`，project 装的不带；Gitee 源会改成 `npx skills add ...` 重装），直接照搬即可，不要自行加减 `-g`。
-- **检查失败**（`检查更新失败`）或**无法确认**（`无法确认是否最新`）：只是更新检查提醒，不影响当前 Alice 调用；同一会话首次看到时简要告知用户一次即可，不可重复提示，也不能当作主调用失败。遇到版本相关错误，可建议用户升级 skill（命令以实际 stderr 输出的 `升级命令：` 为准）。
+- 只记录当前 skill 刚被使用，并后台启动 `scripts/update-check.mjs`，不阻塞 Alice 主请求收尾。
+- 后台检查会等待短暂 quiet window，避免 skill 正在使用时被更新覆盖。
+- 按安装范围读取 lock，检查远端 HEAD，每日成功态去重；Gitee 源或 `skills update` 未落盘时改用 `npx skills add ... --skill wind-alice` 重装。
+- 更新失败、网络不通或无更新时均不输出内容，也不影响本次 Alice 调用。

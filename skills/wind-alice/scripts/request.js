@@ -1,8 +1,15 @@
 import randomUUID from "./uuidv7.js";
-import { spawnUpdateCheck, maybePrintUpdateNotice } from "./update-notify.mjs";
-import { createWriteStream, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { spawnUpdateCheck } from "./update-check.mjs";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname, parse as parsePath } from "node:path";
+import { join, dirname, parse as parsePath, resolve as resolvePath, sep as pathSep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -416,7 +423,7 @@ function buildBody(prompt, skillName = null) {
           name: '{"zh":"智能金融助理","en":"alice chat"}',
           description:
             '{"agentId":"6ba7b810-9dad-11d1-80b4-00c04fd430c8","agentDescription":{"zh":"2023年诞生的智能金融助理，由万得（Wind）AI团队与金融专家团队联合开发，融合近30年金融领域知识及实时全球金融数据，为投资者提供全方位金融咨询与投资决策支持","en":"Intelligent financial assistant launched in 2023, jointly developed by Wind AI team and financial experts, integrating 30 years of financial expertise and real-time global financial data to provide comprehensive financial consulting and investment decision support"}}',
-          url: "https://114.80.154.45/AliceChat.Agent/",
+          url: DEFAULT_API_URL,
           version: "1.0.0",
           capabilities: {
             streaming: true,
@@ -699,8 +706,92 @@ async function downloadOneFile({ url, targetPath, apiKey }) {
 }
 
 /**
- * 把累计的下载链接逐个 GET 下载到当前工作目录，并把结果打到 stderr
+ * 判断 child 是否位于 parent 目录之内（或就是 parent 本身）。
+ * 兼容 Windows 大小写、混用斜杠的情况，并避免 "C:\foo" 被误判为 "C:\foobar" 的子目录。
+ */
+function isPathInside(child, parent) {
+  if (!child || !parent) return false;
+  const childAbs = resolvePath(child);
+  const parentAbs = resolvePath(parent);
+  const norm = (p) =>
+    process.platform === "win32"
+      ? p.replace(/[\\/]+$/, "").toLowerCase()
+      : p.replace(/[\\/]+$/, "");
+  const c = norm(childAbs);
+  const p = norm(parentAbs);
+  if (c === p) return true;
+  return c.startsWith(p + pathSep) || c.startsWith(p + "/");
+}
+
+/**
+ * 判断 dir 下是否存在子目录 `.agents`。
+ */
+function hasDotAgentsChild(dir) {
+  const candidate = join(dir, ".agents");
+  try {
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 解析"下载文件应该落到哪个目录"。
+ *
+ * 规则（按优先级）：
+ *  1. 如果 skill 安装在 `homedir()/.agents` 之下（含 `~/.agents/skills/wind-alice` 这种典型布局），
+ *     下载到 `<homedir>/.agents/download/`。source = "home-agents"。
+ *  2. 否则从 skillDir 沿目录向上找最近的、含有 `.agents/` 子目录的祖先目录 P，
+ *     下载到 `P/.agents/download/`（即项目级 `.agents/download/`）。source = "project-agents"。
+ *     - 上溯过程中**遇到用户主目录就停止**，避免把 `~/.agents` 当作"项目级 .agents"误用，
+ *       让规则 1 与规则 2 在语义上互斥。
+ *  3. 上述都不命中（典型如 skill 处于 SVN/Git 源码开发目录，且没人建过项目级 .agents），
+ *     **统一兜底到用户级 `<homedir>/.agents/download/`**（目录不存在就创建）。
+ *     source = "home-agents-fallback"。
+ *
+ * 不再回退到 `process.cwd()`；这样可以避免把 Alice 下载的文件散落到任意命令执行目录，
+ * 让"找文件就去 ~/.agents/download/"成为可依赖的稳定约定。
+ *
+ * 返回 { dir, source }，source ∈ "home-agents" | "project-agents" | "home-agents-fallback"。
+ */
+export function resolveDownloadDir(skillDir, { home = homedir() } = {}) {
+  const homeAgents = join(home, ".agents");
+
+  if (isPathInside(skillDir, homeAgents)) {
+    return { dir: join(homeAgents, "download"), source: "home-agents" };
+  }
+
+  const homeAbs = resolvePath(home);
+  const sameAsHome = (p) => {
+    const a = process.platform === "win32" ? p.toLowerCase() : p;
+    const b = process.platform === "win32" ? homeAbs.toLowerCase() : homeAbs;
+    return a === b;
+  };
+
+  let cur = resolvePath(skillDir);
+  // 防御性上限：避免极端情况下 dirname 不收敛（POSIX/Windows 根都会自指）。
+  for (let i = 0; i < 64; i++) {
+    if (sameAsHome(cur)) break;
+    if (hasDotAgentsChild(cur)) {
+      return { dir: join(cur, ".agents", "download"), source: "project-agents" };
+    }
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+
+  return { dir: join(homeAgents, "download"), source: "home-agents-fallback" };
+}
+
+/**
+ * 把累计的下载链接逐个 GET 下载到解析出的目标目录，结果打到 stderr
  * （避免污染 stdout 的 agentResult.value 主输出）。
+ *
+ * 目标目录由 resolveDownloadDir 决定：用户级 / 项目级 / 兜底到用户级三种情况都会指向
+ * 一个 `<...>/.agents/download/` 路径；目录不存在时会自动按 recursive 方式创建。
+ * 只有当 mkdir 真的失败（比如磁盘只读、权限拒绝）时，才退到 cwd 作为最后兜底，
+ * 不让用户彻底丢文件。
+ *
  * 重复调用幂等：调用即清空累计列表。
  */
 async function downloadCollectedFiles(apiKey) {
@@ -709,10 +800,40 @@ async function downloadCollectedFiles(apiKey) {
   const items = Array.from(collectedDownloads, ([url, filename]) => ({ url, filename }));
   collectedDownloads.clear();
 
+  const { dir: targetDir } = resolveDownloadDir(SKILL_DIR);
+
+  try {
+    mkdirSync(targetDir, { recursive: true });
+  } catch (e) {
+    console.error(
+      `[warn] 创建下载目录失败：${targetDir}（${e.message}），回退到当前工作目录 ${process.cwd()}`,
+    );
+    return await downloadToFallbackCwd(items, apiKey);
+  }
+
+  console.error("");
+  console.error(
+    `=== 检测到 ${items.length} 个可下载文件，正在下载到：${targetDir} ===`,
+  );
+
+  for (const { url, filename } of items) {
+    const targetPath = resolveUniqueTargetPath(targetDir, filename);
+    const result = await downloadOneFile({ url, targetPath, apiKey });
+    if (result.ok) {
+      console.error(`- ${filename}`);
+      console.error(`  已保存：${result.path}`);
+    } else {
+      console.error(`- ${filename}`);
+      console.error(`  下载失败：${result.error}`);
+      console.error(`  原始 URL：${url}`);
+    }
+  }
+}
+
+async function downloadToFallbackCwd(items, apiKey) {
   const cwd = process.cwd();
   console.error("");
   console.error(`=== 检测到 ${items.length} 个可下载文件，正在下载到当前目录：${cwd} ===`);
-
   for (const { url, filename } of items) {
     const targetPath = resolveUniqueTargetPath(cwd, filename);
     const result = await downloadOneFile({ url, targetPath, apiKey });
@@ -912,9 +1033,6 @@ async function main() {
     return;
   }
 
-  // 每次有效提问都 spawn 探针（对齐 cli.mjs 每次 call）；TTL 在 update-check.mjs 内判定
-  spawnUpdateCheck();
-
   let skillName = null;
   if (skill && skill.trim()) {
     const resolved = resolveSkillName(skill);
@@ -1014,7 +1132,8 @@ async function main() {
     return;
   }
   } finally {
-    maybePrintUpdateNotice();
+    // Alice calls can run for a long time, so trigger updates only after the call settles.
+    spawnUpdateCheck();
   }
 }
 
