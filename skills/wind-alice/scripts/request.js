@@ -14,7 +14,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const DEFAULT_API_URL = "https://alice.wind.com.cn/Weaver/ChatAgent";
+const DEFAULT_API_URL = "https://mcp.wind.com.cn/skills/alice";
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url))); // .../wind-alice
 const WIND_AIFINMARKET_PORTAL = "https://aifinmarket.wind.com.cn";
 
