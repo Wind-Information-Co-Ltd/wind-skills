@@ -18,6 +18,8 @@ description: 平台 skill 清单本地副本。由 npx skills update -g -y 随 w
 | --------------------- | ------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | wind-mcp-skill        | 数据-行情/基金/股票/宏观/文档         | API Key        | 访问万得 Wind 金融数据:A 股 / 港股股票(行情与财务) + ETF / 公募基金(行情与全维数据) + 公司公告 + 财经新闻 + 宏观经济指标                |
 | wind-alice            | Alice 专业金融分析 Agent              | API Key        | Alice 综合分析入口,适合事实核验、公司一页纸、调研问题清单、财报点评、主题选股、基金分析、宏观/债券/信用分析、市场规模测算和可比公司分析 |
+| ifind-finance-data    | 数据-行情/基金/宏观/新闻公告/智能选股 | API Key        | 访问同花顺 iFinD 金融数据:股票、基金、宏观经济、行业经济、新闻公告,并支持智能选股、选基与指标搜索                                       |
+| mx-finance-data       | 数据-结构化查询/行情/财务/估值/多资产 | 依赖 + API Key | 访问东方财富数据库:覆盖 A 股 / 港股 / 美股、基金、债券等多资产结构化数据,输出 xlsx 与结果说明文件                                       |
 | tushare-finance-skill | 数据-行情/财务/宏观/多资产            | 依赖 + Token   | 访问 Tushare Pro 金融数据:覆盖 A 股、港股、美股、基金、期货、债券、财务报表与宏观经济指标                                               |
 
 ---
@@ -42,6 +44,19 @@ description: 平台 skill 清单本地副本。由 npx skills update -g -y 随 w
 | 市场规模测算与战略建模 | `Market Sizing & Strategic Modeling`     | Top-down / Bottom-up 市场规模测算与情景敏感性      |
 | 可比公司分析           | `fsi-comps-analysis`                     | 机构级可比公司分析,含 Excel 和文字报告             |
 | 事实核验               | `Fact Check`                             | 逐点核查金融数据、声明、事件和文本事实             |
+
+---
+
+## Avatar 思维框架索引
+
+> 用户点名人物、要求使用对应思维框架，或问题与下表场景高度匹配时，推荐对应 Avatar skill。明确点名时将其视为必需工作流 skill；未点名的一般分析任务可将其作为可选补充 skill。
+
+| 名称                              | category          | 装好需配置 | 适合问题                                                                 |
+| --------------------------------- | ----------------- | ---------- | ------------------------------------------------------------------------ |
+| avatar-charlie-munger-thinking    | 决策/认知偏误     | 无         | 查理·芒格 / 查理芒格 / Charlie Munger：逆向思考、激励分析、多学科模型、认知偏误叠加与决策失败风险 |
+| avatar-nassim-taleb-risk          | 风险/不确定性     | 无         | 纳西姆·塔勒布 / 纳西姆塔勒布 / Nassim Taleb：尾部风险、出局风险、利益共担、杠铃策略与脆弱性     |
+| avatar-naval-ravikant-thinking    | 职业/创业/人生决策 | 无         | 纳瓦尔·拉维坎特 / 纳瓦尔 / Naval Ravikant：职业、创业、财富、自由、特定知识、杠杆与长期复利     |
+| avatar-warren-buffett-investing   | 长期投资/个股研究 | 无         | 沃伦·巴菲特 / 巴菲特 / Warren Buffett：能力圈、护城河、管理层诚信、所有者收益、估值与安全边际   |
 
 ---
 
@@ -89,7 +104,7 @@ description: 平台 skill 清单本地副本。由 npx skills update -g -y 随 w
 
 | category                      | 含 skill 数 | 代表 skill                           |
 | ----------------------------- | ----------- | ------------------------------------ |
-| 数据-行情/基金/股票/宏观/文档 | 2           | wind-mcp-skill                       |
+| 数据-行情/基金/股票/宏观/文档 | 4           | wind-mcp-skill                       |
 | Alice 专业金融分析 Agent      | 1           | wind-alice                           |
 | 估值                          | 4           | dcf-model                            |
 | 个股研究                      | 5           | equity-investment-thesis             |
@@ -100,6 +115,7 @@ description: 平台 skill 清单本地副本。由 npx skills update -g -y 随 w
 | 仓位                          | 2           | position-sizer                       |
 | 交易执行                      | 4           | trade_plan_builder_skill             |
 | 回测                          | 1           | backtest-expert                      |
+| Avatar 思维框架               | 4           | avatar-charlie-munger-thinking       |
 
 ---
 

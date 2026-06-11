@@ -281,27 +281,32 @@ function die(code, message, { extraHint } = {}) {
 }
 
 function getApiKey() {
-  if (process.env.WIND_API_KEY) return process.env.WIND_API_KEY;
-
-  const localConfig = join(SKILL_DIR, "config.json");
-  if (existsSync(localConfig)) {
-    try {
-      const cfg = JSON.parse(readFileSync(localConfig, "utf8"));
-      if (cfg.wind_api_key) return cfg.wind_api_key;
-    } catch {}
-  }
-
   // 全局 Key 存储位置（与其它 wind 技能可共用）
   const globalConfig = join(homedir(), ".wind-aifinmarket", "config");
   if (existsSync(globalConfig)) {
     try {
       const env = parseDotenv(readFileSync(globalConfig, "utf8"));
-      if (env.WIND_API_KEY) return env.WIND_API_KEY;
+      const key = env.WIND_API_KEY?.trim();
+      if (key) return key;
     } catch {}
   }
 
+  const localConfig = join(SKILL_DIR, "config.json");
+  if (existsSync(localConfig)) {
+    try {
+      const cfg = JSON.parse(readFileSync(localConfig, "utf8"));
+      const key =
+        typeof cfg.wind_api_key === "string" ? cfg.wind_api_key.trim() : "";
+      if (key) return key;
+    } catch {}
+  }
+
+  const envKey = process.env.WIND_API_KEY?.trim();
+  if (envKey) return envKey;
+
   die("KEY_MISSING", "WIND_API_KEY 未配置", {
     extraHint:
+      `CLI 已完整检查：用户全局配置 > Skill 本地配置 > WIND_API_KEY 环境变量；不要再手动检查部分来源。\n` +
       `① 获取 Key：访问 ${WIND_AIFINMARKET_PORTAL}（未登录通常会跳转登录页）。\n` +
       `② 选择 Key 存放位置：\n` +
       `   A. 全局共享【推荐 — 所有 wind skill 共用】：%USERPROFILE%\\.wind-aifinmarket\\config\n` +
@@ -466,12 +471,13 @@ function usage() {
     "  --help,   -h                查看帮助",
     "",
     "Env:",
-    "  WIND_API_KEY                必填；优先级最高",
     "  WIND_ALICE_API_URL          可选；默认 " + DEFAULT_API_URL,
+    "  WIND_API_KEY                可选；配置文件均未提供时读取",
     "",
-    "Config:",
-    `  ${join(SKILL_DIR, "config.json")}   (JSON: {"wind_api_key":"..."})`,
+    "Config (按优先级):",
     `  ${join(homedir(), ".wind-aifinmarket", "config")}  (dotenv: WIND_API_KEY=...)`,
+    `  ${join(SKILL_DIR, "config.json")}   (JSON: {"wind_api_key":"..."})`,
+    "  WIND_API_KEY 环境变量",
   ].join("\n");
 }
 
@@ -929,6 +935,7 @@ const KEY_MISSING_CODE = -32603;
 function dieKeyMissing() {
   die("KEY_MISSING", "WIND_API_KEY 未配置或已失效", {
     extraHint:
+      `CLI 已完整检查：用户全局配置 > Skill 本地配置 > WIND_API_KEY 环境变量；不要再手动检查部分来源。\n` +
       `① 获取 Key：访问 ${WIND_AIFINMARKET_PORTAL}（未登录通常会跳转登录页）。\n` +
       `② 选择 Key 存放位置：\n` +
       `   A. 全局共享【推荐 — 所有 wind skill 共用】：%USERPROFILE%\\.wind-aifinmarket\\config\n` +

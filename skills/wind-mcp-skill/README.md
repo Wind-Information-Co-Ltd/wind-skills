@@ -1,6 +1,6 @@
 # wind-mcp-skill
 
-> **访问万得 Wind 金融数据** · A 股 / 港股 / 美股 / 基金 / 指数 / 债券 / 公告 / 新闻 / 宏观经济
+> **访问万得 Wind 金融数据** · A股 / 港股 / 美股 / 基金 / 指数 / 债券 / 公告 / 新闻 / 宏观经济
 
 ---
 
@@ -8,8 +8,7 @@
  
 通过 MCP 协议访问万得 Wind 金融数据库，给 AI Agent 提供：
 
-- A 股股票筛选 + 行情（最新价 / K 线 / 分钟）+ 财务基本面（财报 / 股本 / 事件 / 技术指标 / 风险）
-- 港股 / 美股股票筛选 + 行情 + 基本面（档案 / 财务 / 股本 / 事件 / 技术指标 / 风险）
+- A股 / 港股 / 美股股票筛选 + 行情（最新价 / K 线 / 分钟）+ 财务基本面（档案 / 财报 / 股本 / 事件 / 技术指标 / 风险）
 - ETF / 公募基金筛选 + 行情 + 全维数据（档案 / 财务 / 持仓 / 业绩 / 持有人 / 管理公司）
 - 指数 / 板块行情 + 档案 / 基本面（成份股加权 PE / PB / PS）/ 技术指标
 - 债券基本档案 / 发债主体 / 行情估值（久期 / 凸性 / 利差）/ 主体财务
@@ -47,7 +46,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 node scripts/cli.mjs open-portal
 ```
 
-如果 CLI 报 `KEY_MISSING`，按 stdout JSON 里的 `error.agent_action` / `error.hint` 配置即可；程序会自动查找环境变量 `WIND_API_KEY` 和常见本地配置文件。
+如果 CLI 报 `KEY_MISSING`，按 stdout JSON 里的 `error.agent_action` / `error.hint` 配置即可；程序按用户全局配置、当前 Skill 本地配置、环境变量 `WIND_API_KEY` 的顺序读取。
 
 ---
 

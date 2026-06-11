@@ -14,12 +14,12 @@
 4. 字段表里**没有**的概念 → 告诉用户"该指标不在 Wind 行情字段范围内",**不要猜名字**
 
 ```bash
-# A 股
+# A股
 node scripts/cli.mjs call stock_data get_stock_price_indicators \
   '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅,成交量,换手率,市盈率(TTM)"}'
 
 # 美股
-node scripts/cli.mjs call global_stock_data get_global_stock_price_indicators \
+node scripts/cli.mjs call stock_data get_stock_price_indicators \
   '{"windcode":"AAPL.O","indexes":"中文简称,最新成交价,涨跌幅,52周最高,52周最低"}'
 
 # 指数
@@ -43,8 +43,8 @@ node scripts/cli.mjs call index_data get_index_price_indicators \
 2. **括号区分含义**:`市盈率(TTM)` / `市盈率(LYR)` / `市盈率(预测)` 是三个不同字段;`总市值1` / `总市值2` 同理(2 是含限售股的口径)。
 3. **极易混淆的同名变种**:`涨跌` (单位:元) ≠ `涨跌幅` (单位:%) ≠ `涨跌BP` (单位:bp,债券专用) ≠ `5分钟涨跌幅`。
 4. **schema 列了不代表后端实现了 / 不代表当前品种有数据**。遇到字段返空或报错,**不要在快照工具里反复试拼写**,直接切 NL 类工具兜底:
-   - 多周期涨跌幅 / 历史走势 / 资金流时间序列 → `get_stock_technicals` / `get_global_stock_technicals` / `get_index_technicals` (`{question}` 自然语言)
-   - 财务 / 估值衍生指标 → `get_stock_fundamentals` / `get_global_stock_fundamentals` / `get_fund_financials` / `get_index_fundamentals`
+   - 多周期涨跌幅 / 历史走势 / 资金流时间序列 → `get_stock_technicals` / `get_index_technicals` (`{question}` 自然语言)
+   - 财务 / 估值衍生指标 → `get_stock_fundamentals` / `get_fund_financials` / `get_index_fundamentals`
    - 跨域综合 → `analytics_data.get_financial_data`
 
 **铁律**:从本表里**复制粘贴**字段名,不要凭印象敲;字段不识别就**立刻切 NL**,不要反复试。

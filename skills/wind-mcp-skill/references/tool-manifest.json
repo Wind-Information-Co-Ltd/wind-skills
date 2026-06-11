@@ -11,18 +11,6 @@
     "get_stock_technicals",
     "get_risk_metrics"
   ],
-  "global_stock_data": [
-    "search_global_stocks",
-    "get_global_stock_price_indicators",
-    "get_global_stock_kline",
-    "get_global_stock_quote",
-    "get_global_stock_basicinfo",
-    "get_global_stock_fundamentals",
-    "get_global_stock_equity_holders",
-    "get_global_stock_events",
-    "get_global_stock_technicals",
-    "get_global_stock_risk_metrics"
-  ],
   "fund_data": [
     "search_funds",
     "get_fund_price_indicators",

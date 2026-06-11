@@ -48,7 +48,7 @@ Using "<英文 Skill 名>" skill:<原 prompt>
    - 用户点名 Skill → 直接传该 Skill 的**中文名或英文名**到 `--skill`（脚本会自动归一化并回填英文名）；
    - 用户没点名但问题明显属于某 Skill（如「核查事实」「公司调研问题清单」「财报点评」）→ 可建议并征询后再指定；
    - 否则不传 `--skill`，走 auto。
-2. **发起调用前**用一句话告知用户：Alice 专业 Skill 耗时常为 **数分钟到十几分钟**（复杂研报、一页纸、可比分析等更久），属正常现象，请耐心等待，**不要中途取消命令或重复发起相同请求**。
+2. **发起调用前**用一句话告知用户：Alice 专业 Skill 耗时常为 **数分钟到十几分钟**（复杂研报、一页纸、可比分析等更久），且可能消耗较多积分；属正常现象，请耐心等待，**不要中途取消命令或重复发起相同请求**。
 3. **先定位本 skill 目录**：下面命令里的 `scripts/wind-alice.mjs` 是相对当前 `SKILL.md` 所在的 `wind-alice` 目录。若当前工作目录不是该目录，先 `cd` 到该目录再执行。
 4. 执行（任一种写法都可以）：
 
@@ -71,7 +71,8 @@ node scripts/wind-alice.mjs --prompt "<USER_QUESTION>" --skill "<英文 Skill �
 
 1. Node.js 18+（自带 `fetch`）。
 2. 配置 **WIND_API_KEY**：
-   - 优先级：`WIND_API_KEY` 环境变量 > 本 skill 目录 `config.json`（`{"wind_api_key":"..."}`） > `%USERPROFILE%\.wind-aifinmarket\config`（dotenv：`WIND_API_KEY=...`）。
+   - 优先级：`%USERPROFILE%\.wind-aifinmarket\config`（dotenv：`WIND_API_KEY=...`）> 本 skill 目录 `config.json`（`{"wind_api_key":"..."}`）> `WIND_API_KEY` 环境变量。
+   - 不得手动检查部分来源后判定缺 Key。必须直接执行 CLI；只有 CLI 返回 `KEY_MISSING`，才能判定全部来源均未提供有效 Key。
    - Key 获取入口：<https://aifinmarket.wind.com.cn/#/user/overview>。
 3. 可选：`WIND_ALICE_API_URL` 覆盖默认接口地址。
 

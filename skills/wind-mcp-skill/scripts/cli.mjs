@@ -6,17 +6,13 @@ import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
-const SKILL_VERSION = '1.7.0';
+const SKILL_VERSION = '1.9.2';
 
 // 本地 registry: 工具选择可在任何网络调用前失败
 const SERVERS = {
   stock_data: {
     endpoint: 'https://mcp.wind.com.cn/vserver_stock_data/mcp/',
-    label: 'Wind A 股股票（选股筛选 + 档案/财务/股本/事件/技术/风险 + 行情/K线/分钟）',
-  },
-  global_stock_data: {
-    endpoint: 'https://mcp.wind.com.cn/vserver_global_stock_data/mcp/',
-    label: 'Wind 全球股票/港股美股（港美股筛选 + 档案/财务/股本/事件/技术/风险 + 行情/K线/分钟）',
+    label: 'Wind A股/港股/美股 股票（选股筛选 + 档案/财务/股本/事件/技术/风险 + 行情/K线/分钟）',
   },
   fund_data: {
     endpoint: 'https://mcp.wind.com.cn/vserver_fund_data/mcp/',
@@ -52,19 +48,20 @@ const SKILL_DIR = dirname(dirname(fileURLToPath(
 const UPDATE_CHECK_PATH = join(SKILL_DIR, 'scripts', 'update-check.mjs');
 const TOOL_MANIFEST_PATH = join(SKILL_DIR, 'references', 'tool-manifest.json');
 const ERROR_CODES_PATH = join(SKILL_DIR, 'references', 'error-codes.json');
+const NORMALIZATION_RULES_PATH = join(SKILL_DIR, 'references', 'normalization-rules.json');
 const SKILL_NAME = basename(SKILL_DIR);
 
 const CALL_EXAMPLES = [
   `cli.mjs call stock_data search_stocks '{"question":"筛选沪深市场市值超500亿且连续5日上涨的股票"}'`,
-  `cli.mjs call global_stock_data search_global_stocks '{"question":"筛选港股中市值超1000亿港元的科技股"}'`,
+  `cli.mjs call stock_data search_stocks '{"question":"筛选港股中市值超1000亿港元的科技股"}'`,
   `cli.mjs call fund_data search_funds '{"question":"筛选股票型基金中近一年收益率超20%的产品"}'`,
   `cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH公司基本档案"}'`,
   `cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅"}'`,
   `cli.mjs call fund_data get_fund_kline '{"windcode":"588200.SH","begin_date":"20260401","end_date":"20260430"}'`,
-  `cli.mjs call global_stock_data get_global_stock_quote '{"windcode":"AAPL.O"}'`,
+  `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O"}'`,
   `cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"20260401","end_date":"20260430"}'`,
   `cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":3}'`,
-  `cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国GDP"}'`,
+  `cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国GDP","endDate":"20261231"}'`,
   `cli.mjs call analytics_data get_financial_data '{"question":"查询中国A股市场过去一年的平均成交量"}'`,
 ];
 
@@ -242,9 +239,36 @@ function validateToolSelection(server_type, toolName) {
   }
 }
 
-const BASIC_TEXT_KEYS = ['question', 'query', 'metricIdsStr', 'windcode', 'indexes'];
-const BASIC_NO_WHITESPACE_KEYS = ['question', 'query', 'metricIdsStr'];
+const BASIC_TEXT_KEYS = ['question', 'query', 'metricIdsStr', 'windcode', 'indexes', 'freq', 'magnitude', 'currency'];
+const BASIC_NO_WHITESPACE_KEYS = ['query', 'metricIdsStr'];
 const BASIC_DATE_KEYS = ['begin_date', 'end_date', 'beginDate', 'endDate', 'date', 'tradeDate'];
+const PRICE_INDICATOR_TOOLS = new Set(['get_stock_price_indicators', 'get_fund_price_indicators', 'get_index_price_indicators']);
+const KLINE_TOOLS = new Set(['get_stock_kline', 'get_fund_kline', 'get_index_kline']);
+const QUOTE_TOOLS = new Set(['get_stock_quote', 'get_fund_quote', 'get_index_quote']);
+const EDB_TOOLS = new Set(['get_economic_data']);
+const EDB_FREQ_VALUES = new Set(['日', '工作日', '周', '月', '季', '半年', '年', '年度']);
+const EDB_MAGNITUDE_VALUES = new Set(['个', '千', '万', '百万', '千万', '亿', '十亿', '百亿', '千亿', '万亿']);
+const EDB_CURRENCY_VALUES = new Set(['USD', 'CNY', 'EUR', 'JPY', 'AUD', 'GBP', 'CHF', 'CAD', 'SGD', 'BYR', 'HKD', 'MYR']);
+
+function readNormalizationRules() {
+  const rules = JSON.parse(readFileSync(NORMALIZATION_RULES_PATH, 'utf8'));
+  return {
+    klinePeriods: new Set(rules.kline_periods || []),
+    periodAliases: new Map(Object.entries(rules.period_aliases || {})),
+    indicatorAliases: new Map(Object.entries(rules.indicator_aliases || {})),
+    indexCodeAliases: new Map(Object.entries(rules.index_code_aliases || {})),
+    legacyToolAliases: new Map(Object.entries(rules.legacy_tool_aliases || {})),
+    toolByDomain: rules.tool_by_domain || {},
+  };
+}
+
+const NORMALIZATION_RULES = readNormalizationRules();
+const KLINE_PERIODS = NORMALIZATION_RULES.klinePeriods;
+const PERIOD_ALIASES = NORMALIZATION_RULES.periodAliases;
+const INDICATOR_ALIASES = NORMALIZATION_RULES.indicatorAliases;
+const INDEX_CODE_ALIASES = NORMALIZATION_RULES.indexCodeAliases;
+const LEGACY_TOOL_ALIASES = NORMALIZATION_RULES.legacyToolAliases;
+const TOOL_BY_DOMAIN = NORMALIZATION_RULES.toolByDomain;
 
 function isValidBasicDate(value) {
   if (!/^\d{8}$/.test(value)) return false;
@@ -253,6 +277,86 @@ function isValidBasicDate(value) {
   const d = Number(value.slice(6, 8));
   const dt = new Date(Date.UTC(y, m - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+function normalizeIndicatorKey(value) {
+  return String(value || '').trim().replace(/\s+/g, '').replace(/[（]/g, '(').replace(/[）]/g, ')').toLowerCase();
+}
+
+function normalizeIndexes(indexes) {
+  if (typeof indexes !== 'string') return indexes;
+  return indexes.split(',').map((item) => INDICATOR_ALIASES.get(normalizeIndicatorKey(item)) || item.trim()).filter(Boolean).join(',');
+}
+
+function looksLikeFundCode(code) {
+  return /^5\d{5}\.SH$/.test(code) || /^1[56]\d{4}\.SZ$/.test(code) || /^\d{6}\.OF$/.test(code);
+}
+
+function looksLikeIndexCode(code) {
+  return /^(\d{6})\.(CSI|WI|MI|HI|GI)$/.test(code) ||
+    /^(000300|000905|000852|000016|000001)\.SH$/.test(code) ||
+    /^(399001|399006|399300)\.SZ$/.test(code) ||
+    /^[A-Z]{2,10}\.(HI|GI)$/.test(code);
+}
+
+function normalizeWindcode(windcode) {
+  if (typeof windcode !== 'string') return windcode;
+  const raw = windcode.trim();
+  const alias = INDEX_CODE_ALIASES.get(raw.toUpperCase());
+  if (alias) return alias;
+  const upper = raw.toUpperCase();
+  if (/^\d{4}\.HK$/.test(upper)) return `0${upper}`;
+  if (looksLikeIndexCode(upper)) return upper;
+  if (/^\d{6}$/.test(upper)) {
+    if (/^9\d{5}$/.test(upper)) return `${upper}.BJ`;
+    if (/^5\d{5}$/.test(upper)) return `${upper}.SH`;
+    if (/^1[56]\d{4}$/.test(upper)) return `${upper}.SZ`;
+    if (/^(000300|000905|000852|000016|000001)$/.test(upper)) return `${upper}.SH`;
+    if (/^399\d{3}$/.test(upper)) return `${upper}.SZ`;
+    if (/^[036]\d{5}$/.test(upper)) return `${upper}.${upper.startsWith('6') ? 'SH' : 'SZ'}`;
+  }
+  if (/^5\d{5}\.SZ$/.test(upper)) return upper.replace(/\.SZ$/, '.SH');
+  if (/^1[56]\d{4}\.SH$/.test(upper)) return upper.replace(/\.SH$/, '.SZ');
+  if (/^[03]\d{5}\.SH$/.test(upper)) return upper.replace(/\.SH$/, '.SZ');
+  if (/^6\d{5}\.SZ$/.test(upper)) return upper.replace(/\.SZ$/, '.SH');
+  if (/^9\d{5}\.(SH|SZ)$/.test(upper)) return upper.replace(/\.(SH|SZ)$/, '.BJ');
+  if (/^[A-Z]{1,5}$/.test(upper)) return `${upper}.O`;
+  return upper;
+}
+
+function toolFamily(toolName) {
+  if (PRICE_INDICATOR_TOOLS.has(toolName)) return 'price';
+  if (KLINE_TOOLS.has(toolName)) return 'kline';
+  if (QUOTE_TOOLS.has(toolName)) return 'quote';
+  return null;
+}
+
+function inferServerTypeFromWindcode(currentServerType, windcode) {
+  if (typeof windcode !== 'string') return currentServerType;
+  if (looksLikeFundCode(windcode)) return 'fund_data';
+  if (looksLikeIndexCode(windcode)) return 'index_data';
+  if (/^\d{4,5}\.HK$/.test(windcode) || /^[A-Z]{1,5}\.(O|N|A|HK|SH|SZ|BJ)$/.test(windcode) || /^\d{6}\.(SH|SZ|BJ)$/.test(windcode)) {
+    return 'stock_data';
+  }
+  return currentServerType;
+}
+
+function normalizeCall(server_type, toolName, args) {
+  const legacyTool = LEGACY_TOOL_ALIASES.get(toolName);
+  if (legacyTool) [server_type, toolName] = legacyTool;
+  const normalizedArgs = { ...args };
+  if (typeof normalizedArgs.indexes === 'string') normalizedArgs.indexes = normalizeIndexes(normalizedArgs.indexes);
+  if (typeof normalizedArgs.windcode === 'string') normalizedArgs.windcode = normalizeWindcode(normalizedArgs.windcode);
+  if (typeof normalizedArgs.period === 'string') {
+    const key = normalizedArgs.period.trim().toLowerCase();
+    normalizedArgs.period = PERIOD_ALIASES.get(key) || normalizedArgs.period.trim();
+  }
+  const family = toolFamily(toolName);
+  if (family && typeof normalizedArgs.windcode === 'string') {
+    server_type = inferServerTypeFromWindcode(server_type, normalizedArgs.windcode);
+    toolName = TOOL_BY_DOMAIN[family]?.[server_type] || toolName;
+  }
+  return { server_type, toolName, args: normalizedArgs };
 }
 
 function validateBasicParams(params) {
@@ -290,28 +394,68 @@ function validateBasicParams(params) {
   return errors;
 }
 
+function validateToolParams(toolName, params) {
+  const errors = [];
+  if (KLINE_TOOLS.has(toolName)) {
+    for (const key of ['windcode', 'begin_date', 'end_date']) {
+      if (!(key in params)) errors.push(`K 线工具缺少必填字段 '${key}'`);
+    }
+    if ('period' in params && !KLINE_PERIODS.has(String(params.period))) {
+      errors.push(`字段 'period' 只能是 ${Array.from(KLINE_PERIODS).join('/')}，日 K 请传 '10'`);
+    }
+    for (const key of ['aftime', 'issusp']) {
+      if (key in params && !new Set(['0', '1']).has(String(params[key]))) {
+        errors.push(`字段 '${key}' 只能是 '0' 或 '1'`);
+      }
+    }
+  }
+  if (EDB_TOOLS.has(toolName)) {
+    const allowedKeys = new Set(['metricIdsStr', 'beginDate', 'endDate', 'freq', 'magnitude', 'currency']);
+    for (const key of Object.keys(params)) {
+      if (!allowedKeys.has(key)) errors.push(`宏观 EDB 工具不支持字段 '${key}'`);
+    }
+    if (!params.metricIdsStr) errors.push("宏观 EDB 工具缺少必填字段 'metricIdsStr'");
+    if (params.freq && !EDB_FREQ_VALUES.has(params.freq)) {
+      errors.push("字段 'freq' 只能是 日/工作日/周/月/季/半年/年/年度");
+    }
+    if (params.magnitude && !EDB_MAGNITUDE_VALUES.has(params.magnitude)) {
+      errors.push("字段 'magnitude' 取值不在宏观 EDB 工具枚举内");
+    }
+    if (params.currency && !EDB_CURRENCY_VALUES.has(params.currency)) {
+      errors.push("字段 'currency' 取值不在宏观 EDB 工具枚举内");
+    }
+    if (params.beginDate && params.endDate && params.beginDate > params.endDate) {
+      errors.push("字段 'beginDate' 不能晚于 'endDate'");
+    }
+  }
+  return errors;
+}
+
 // ───── 认证 ─────
 
 function getApiKey() {
-  if (process.env.WIND_API_KEY) return process.env.WIND_API_KEY;
+  const globalConfig = join(homedir(), '.wind-aifinmarket', 'config');
+  if (existsSync(globalConfig)) {
+    try {
+      const env = parseDotenv(readFileSync(globalConfig, 'utf8'));
+      const key = env.WIND_API_KEY?.trim();
+      if (key) return key;
+    } catch {}
+  }
 
   const localConfig = join(SKILL_DIR, 'config.json');
   if (existsSync(localConfig)) {
     try {
       const cfg = JSON.parse(readFileSync(localConfig, 'utf8'));
-      if (cfg.wind_api_key) return cfg.wind_api_key;
+      const key = typeof cfg.wind_api_key === 'string' ? cfg.wind_api_key.trim() : '';
+      if (key) return key;
     } catch {}
   }
 
-  const globalConfig = join(homedir(), '.wind-aifinmarket', 'config');
-  if (existsSync(globalConfig)) {
-    try {
-      const env = parseDotenv(readFileSync(globalConfig, 'utf8'));
-      if (env.WIND_API_KEY) return env.WIND_API_KEY;
-    } catch {}
-  }
+  const envKey = process.env.WIND_API_KEY?.trim();
+  if (envKey) return envKey;
 
-  die('AUTH_ERROR', 'WIND_API_KEY 未配置');
+  die('AUTH_ERROR', 'WIND_API_KEY 未配置（CLI 已完整检查：用户全局配置 > Skill 本地配置 > 环境变量）');
 }
 
 // section: 错误码 — message 来自 HTTP / JSON-RPC / 工具内嵌 JSON, 统一映射成稳定 code
@@ -512,8 +656,6 @@ async function cmdCall(server_type, toolName, paramsJson) {
     );
   }
 
-  validateToolSelection(server_type, toolName);
-
   let args;
   try {
     args = JSON.parse(paramsJson);
@@ -521,7 +663,11 @@ async function cmdCall(server_type, toolName, paramsJson) {
     die('INVALID_PARAMS_JSON', `params JSON 解析失败：${e.message} | 原文：${paramsJson.slice(0, 200)}`);
   }
 
+  ({ server_type, toolName, args } = normalizeCall(server_type, toolName, args));
+  validateToolSelection(server_type, toolName);
+
   const validationErrors = validateBasicParams(args);
+  validationErrors.push(...validateToolParams(toolName, args));
   if (validationErrors.length > 0) {
     die('PARAM_VALIDATION_ERROR', validationErrors.join('；'));
   }

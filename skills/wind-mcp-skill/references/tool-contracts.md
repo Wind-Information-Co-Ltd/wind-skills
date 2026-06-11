@@ -28,11 +28,6 @@
 | `stock_data` | `get_stock_kline` | `windcode` + `begin_date` + `end_date`（+`period` / `count` / `aftime`…） |
 | `stock_data` | `get_stock_quote` | `windcode`（+`begin` / `end`） |
 | `stock_data` | `get_stock_basicinfo` / `get_stock_fundamentals` / `get_stock_equity_holders` / `get_stock_events` / `get_stock_technicals` / `get_risk_metrics` | `question`（+`lang`） |
-| `global_stock_data` | `search_global_stocks` | `question`（+`lang` / `version`） |
-| `global_stock_data` | `get_global_stock_price_indicators` | `windcode` + `indexes` |
-| `global_stock_data` | `get_global_stock_kline` | `windcode` + `begin_date` + `end_date` |
-| `global_stock_data` | `get_global_stock_quote` | `windcode`（+`begin` / `end`） |
-| `global_stock_data` | `get_global_stock_basicinfo` / `get_global_stock_fundamentals` / `get_global_stock_equity_holders` / `get_global_stock_events` / `get_global_stock_technicals` / `get_global_stock_risk_metrics` | `question`（+`lang`） |
 | `fund_data` | `search_funds` | `question`（+`lang` / `version`） |
 | `fund_data` | `get_fund_price_indicators` | `windcode` + `indexes` |
 | `fund_data` | `get_fund_kline` | `windcode` + `begin_date` + `end_date` |
@@ -55,9 +50,8 @@
 | --- | --- | --- |
 | 行情类 | `{windcode, ...}` | 股票 / 港美股 / 基金 / 指数行情工具 |
 | 股票筛选 | `{question, lang?, version?}` | `stock_data.search_stocks` |
-| 港美股筛选 | `{question, lang?, version?}` | `global_stock_data.search_global_stocks` |
 | 基金筛选 | `{question, lang?, version?}` | `fund_data.search_funds` |
-| 专项 NL | `{question, lang?}` | `stock_data`、`global_stock_data`、`fund_data`、`index_data`、`bond_data` NL 工具 |
+| 专项 NL | `{question, lang?}` | `stock_data`、`fund_data`、`index_data`、`bond_data` NL 工具 |
 | 文档 RAG | `{query, top_k?}` | `financial_docs` 工具 |
 | 宏观 EDB | `{metricIdsStr, ...}` | `economic_data.get_economic_data` |
 | 通用结构化取数 | `{question, lang?}` | `analytics_data.get_financial_data` |
@@ -73,7 +67,7 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 
 `windcode` 优先传用户给出的单个标的名称或代码。Wind 可解析中文名、简称和标准代码，例如：
 
-- A 股：`600519.SH`、`8XXXXX.BJ`
+- A股：`600519.SH`、`8XXXXX.BJ`
 - 港股：`00700.HK`
 - 美股：`AAPL.O`、`MSFT.O`
 - 场外基金：`005827.OF`
@@ -84,9 +78,9 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 
 ## 股票筛选
 
-`stock_data.search_stocks`（股票筛选）从全市场 A 股中筛选符合条件的股票，返回股票代码列表。
+`stock_data.search_stocks`（股票筛选）从全市场中筛选符合条件的股票，返回股票代码列表。
 
-触发条件：用户未指定具体股票，而是描述 A 股选股条件，例如市值、涨跌幅、行业、上市板、
+触发条件：用户未指定具体股票，而是描述 选股条件，例如市值、涨跌幅、行业、上市板、
 连续上涨 / 下跌、技术形态或其它筛选条件。
 
 不要用于：已指定单只股票的行情 / 财务查询；港股、美股、基金、指数、债券筛选；需要返回字段值而非股票代码列表的取数。
@@ -101,13 +95,13 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 
 ## 港美股筛选
 
-`global_stock_data.search_global_stocks`（港美股筛选）从港股 / 美股中筛选符合条件的股票，
+`stock_data.search_stocks`（港美股筛选）从港股 / 美股中筛选符合条件的股票，
 返回港股 / 美股代码列表。
 
 触发条件：用户未指定具体港股 / 美股，而是描述选股条件，例如市场、市值、涨跌幅、行业、
 交易所、上市地或其它筛选条件。
 
-不要用于：已指定单只港股 / 美股的行情 / 财务查询；A 股、基金、指数、债券筛选；
+不要用于：已指定单只港股 / 美股的行情 / 财务查询；A股、基金、指数、债券筛选；
 需要返回字段值而非股票代码列表的取数。
 
 | 字段 | 必填 | 说明 |
@@ -145,7 +139,6 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 | server_type | tool_name |
 | --- | --- |
 | `stock_data` | `get_stock_price_indicators` |
-| `global_stock_data` | `get_global_stock_price_indicators` |
 | `fund_data` | `get_fund_price_indicators` |
 | `index_data` | `get_index_price_indicators` |
 
@@ -160,6 +153,10 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 `references/indicators.md`，改用合适的 NL 工具，或说明该快照字段不可用。
 用户口语字段必须映射为表内精确字段后再传入，例如“今开”传 `今日开盘价`，
 “昨收”传 `前收盘价`；找不到表内精确字段时不要传入快照工具。
+CLI 会在调用前归一部分高频别名：`最新价` / `收盘价` / `close` -> `最新成交价`，
+`昨收` -> `前收盘价`，`开盘价` / `open` -> `今日开盘价`，`市盈率TTM` / `pe_ttm` ->
+`市盈率(TTM)`，`总市值` -> `总市值2`，`近一年收益率` -> `近一年净值增长率`。
+若用户明确要求“流通口径总市值”，传 `总市值1`；若明确要求“含限售总市值”，传 `总市值2`。
 
 以下仅是常用候选，用于定位用户已请求的字段；不得把候选列表当作默认字段集。
 传参前仍要逐项核对 `references/indicators.md`：
@@ -179,7 +176,6 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 | server_type | tool_name |
 | --- | --- |
 | `stock_data` | `get_stock_kline` |
-| `global_stock_data` | `get_global_stock_kline` |
 | `fund_data` | `get_fund_kline` |
 | `index_data` | `get_index_kline` |
 
@@ -194,6 +190,14 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 | `issusp` | | `"1"` | `"0"`=不含停牌, `"1"`=含 |
 | `afdate` | | | 可选复权基准日，`yyyyMMdd` |
 
+CLI 会把 `day` / `D` / `daily` / `日线` 归一为 `period:"10"`，把 `week` / `周线`
+归一为 `11`，把 `month` / `月线` 归一为 `12`。其它 `period` 值会在本地校验阶段拦截，
+避免后端因 `"day"` / `"D"` 等字符串返回 500。
+
+行情工具会做常见标的归一：港股四位码补前导零；裸美股 ticker 如 `NVDA` 补为 `NVDA.O`；
+`HSI` / `HSI.HK` 补为 `HSI.HI`；ETF / LOF 代码会从 `stock_data` 改路由到 `fund_data`；
+常见指数代码会从 `stock_data` 改路由到 `index_data`。
+
 ### 分钟行情
 
 用于日内走势或分钟级行情数据。
@@ -201,7 +205,6 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 | server_type | tool_name |
 | --- | --- |
 | `stock_data` | `get_stock_quote` |
-| `global_stock_data` | `get_global_stock_quote` |
 | `fund_data` | `get_fund_quote` |
 | `index_data` | `get_index_quote` |
 
@@ -219,29 +222,17 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 - `lang?: "English" | "中文"` 默认 `"中文"`。
 - 调用前移除自然语言字段值中的空白字符。
 
-### A 股：`stock_data`
+### A股 / 港股 / 美股：`stock_data`
 
 | 工具 | 适用场景 | `question` 示例 |
 | --- | --- | --- |
-| `search_stocks` | 全市场 A 股股票筛选，返回代码列表 | `"筛选沪深市场市值超500亿且连续5日上涨的股票"` |
+| `search_stocks` | 全市场 股票筛选，返回代码列表 | `"筛选沪深市场市值超500亿且连续5日上涨的股票"` |
 | `get_stock_basicinfo` | 公司档案、主营、行业、IPO、上市板 | `"600519.SH公司基本档案"` |
 | `get_stock_fundamentals` | 盈利、资产负债、利润、现金流、增长率、银行业专项 | `"贵州茅台2024年ROE和净利润增速"` |
 | `get_stock_equity_holders` | 股本、流通、前十大股东、实控人、限售 | `"贵州茅台前十大股东"` |
 | `get_stock_events` | IPO、增发、配股、并购、ST、分红 | `"宁德时代2024年增发和并购事件"` |
 | `get_stock_technicals` | MACD、KDJ、RSI、BOLL、融资融券、龙虎榜 | `"贵州茅台近60日MACD走势"` |
 | `get_risk_metrics` | Beta、Jensen Alpha、波动率、Sharpe、VaR | `"贵州茅台过去1年Beta和波动率"` |
-
-### 港股 / 美股：`global_stock_data`
-
-| 工具 | 适用场景 | `question` 示例 |
-| --- | --- | --- |
-| `search_global_stocks` | 港股 / 美股股票筛选，返回代码列表 | `"筛选港股中市值超1000亿港元的科技股"` |
-| `get_global_stock_basicinfo` | 公司档案、注册地、经营范围、交易所、行业、指数成份 | `"AAPL.O公司基本档案"` |
-| `get_global_stock_fundamentals` | 财务、PE / PB / PS、历史分位 | `"腾讯(00700.HK)2024年ROE和营收"` |
-| `get_global_stock_equity_holders` | 股本、主要股东、机构持仓、限售解禁 | `"腾讯(00700.HK)前十大股东"` |
-| `get_global_stock_events` | IPO、增发、配股、并购、监管、分红 | `"腾讯(00700.HK)分红历史"` |
-| `get_global_stock_technicals` | 多周期涨跌幅、MACD、KDJ、RSI、BOLL、融资融券 | `"AAPL.O的MACD和RSI"` |
-| `get_global_stock_risk_metrics` | Beta、Alpha、波动率、Sharpe、最大回撤、VaR | `"AAPL.O过去1年Beta和波动率"` |
 
 ### 基金 / ETF / LOF：`fund_data`
 
@@ -299,8 +290,6 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 | `freq` | | `日`=`1`, `工作日`=`2`, `周`=`3`, `月`=`4`, `季`=`5`, `半年`=`6`, `年`=`7`, `年度`=`8` |
 | `magnitude` | | `个`, `千`, `万`, `百万`, `千万`, `亿`, `十亿`, `百亿`, `千亿`, `万亿` |
 | `currency` | | `USD`, `CNY`, `EUR`, `JPY`, `AUD`, `GBP`, `CHF`, `CAD`, `SGD`, `HKD`, `MYR`, `BYR` |
-| `searchType` | | `深度`=`0`, `精确`=`1` |
-| `ifUnion` | | `开启`=`1`, `不开启`=`2` |
 
 ## 通用取数兜底
 
@@ -324,11 +313,11 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 
 ```bash
 node scripts/cli.mjs call stock_data search_stocks '{"question":"筛选沪深市场市值超500亿且连续5日上涨的股票"}'
-node scripts/cli.mjs call global_stock_data search_global_stocks '{"question":"筛选港股中市值超1000亿港元的科技股"}'
+node scripts/cli.mjs call stock_data search_stocks '{"question":"筛选港股中市值超1000亿港元的科技股"}'
 node scripts/cli.mjs call fund_data search_funds '{"question":"筛选股票型基金中近一年收益率超20%的产品"}'
 node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅,成交量"}'   # indexes 逐字抄 indicators.md
 node scripts/cli.mjs call stock_data get_stock_kline '{"windcode":"600519.SH","begin_date":"20260401","end_date":"20260430"}'   # 日期 yyyyMMdd，不带 -
-node scripts/cli.mjs call global_stock_data get_global_stock_kline '{"windcode":"00700.HK","begin_date":"20260401","end_date":"20260430"}'
+node scripts/cli.mjs call stock_data get_stock_kline '{"windcode":"00700.HK","begin_date":"20260401","end_date":"20260430"}'
 node scripts/cli.mjs call fund_data get_fund_price_indicators '{"windcode":"588200.SH","indexes":"中文简称,最新成交价,IOPV,贴水率"}'
 node scripts/cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":5}'   # query 无空格
 node scripts/cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国CPI同比","freq":"月","beginDate":"20240101","endDate":"20261231"}'   # 宏观用 beginDate/endDate
