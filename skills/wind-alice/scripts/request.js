@@ -344,48 +344,12 @@ function resubscribeBody({ taskId, contextId, params }) {
 /**
  * 构造调用 Alice Agent 的请求体。
  * @param {string} prompt    用户原始问题
- * @param {string|null} skillName  英文 Skill 名（如 "Stock DD List"）；null=auto
+ * @param {string|null} skillName  英文 Skill 名（如 "Stock DD List"）；null 则直接使用 prompt
  *
- * 实测：portal 通过 prompt 文本前缀 `Using "<nameEn>" skill:` 指定 Skill，
- * data 同时切换为 chatMode "12" + originalChatMode "4"，且不携带 agentCard。
- * auto 模式下沿用此前已验证可工作的 chatMode "0" + agentCard 旧格式。
+ * 有 skillName 时在 prompt 前拼 `Using "<nameEn>" skill:` 前缀；其余请求参数一致。
  */
 function buildBody(prompt, skillName = null) {
-  if (skillName) {
-    const text = `Using "${skillName}" skill:${prompt}`;
-    return {
-      jsonrpc: "2.0",
-      method: "message/stream",
-      params: {
-        message: {
-          messageId: randomUUID(),
-          role: "user",
-          kind: "message",
-          parts: [
-            { kind: "text", text },
-            {
-              kind: "data",
-              data: {
-                chatMode: "12",
-                originalChatMode: "4",
-                switchMode: "auto",
-                timezone: "Asia/Shanghai",
-              },
-              metadata: {
-                key: "Wind.WindSearch.ChatService.A2A",
-                version: "1.0.0",
-              },
-            },
-          ],
-          contextId: randomUUID(),
-          taskId: randomUUID(),
-        },
-      },
-      id: randomUUID(),
-    };
-  }
-
-  // auto 模式：维持已验证可工作的旧格式
+  const text = skillName ? `Using "${skillName}" skill:${prompt}` : prompt;
   return {
     jsonrpc: "2.0",
     method: "message/stream",
@@ -395,24 +359,15 @@ function buildBody(prompt, skillName = null) {
         role: "user",
         kind: "message",
         parts: [
-          { kind: "text", text: prompt },
+          { kind: "text", text },
           {
+            kind: "data",
             data: {
-              chatMode: "0",
+              chatMode: "12",
+              originalChatMode: "4",
               switchMode: "auto",
-              selectedSkillIds: [],
-              intentionModel: null,
-              files: [],
-              file: null,
-              fileIds: [],
-              index: randomUUID(),
-              questionIndex: 1,
-              coEditState: {},
-              hasCoEdit: "1",
-              questionType: "",
               timezone: "Asia/Shanghai",
             },
-            kind: "data",
             metadata: {
               key: "Wind.WindSearch.ChatService.A2A",
               version: "1.0.0",
@@ -421,30 +376,6 @@ function buildBody(prompt, skillName = null) {
         ],
         contextId: randomUUID(),
         taskId: randomUUID(),
-        referenceTaskIds: [],
-      },
-      metadata: {
-        agentCard: {
-          name: '{"zh":"智能金融助理","en":"alice chat"}',
-          description:
-            '{"agentId":"6ba7b810-9dad-11d1-80b4-00c04fd430c8","agentDescription":{"zh":"2023年诞生的智能金融助理，由万得（Wind）AI团队与金融专家团队联合开发，融合近30年金融领域知识及实时全球金融数据，为投资者提供全方位金融咨询与投资决策支持","en":"Intelligent financial assistant launched in 2023, jointly developed by Wind AI team and financial experts, integrating 30 years of financial expertise and real-time global financial data to provide comprehensive financial consulting and investment decision support"}}',
-          url: DEFAULT_API_URL,
-          version: "1.0.0",
-          capabilities: {
-            streaming: true,
-            pushNotifications: false,
-            stateTransitionHistory: false,
-          },
-          defaultInputModes: ["text/plain", "application/json"],
-          defaultOutputModes: ["text/plain", "application/json"],
-          skills: [],
-          documentationUrl: "",
-          provider: { name: "alice", contact: "" },
-          security: [{ apiKey: [] }],
-          securitySchemes: { apiKey: { type: "", name: "", in: "" } },
-          supportsAuthenticatedExtendedCard: false,
-        },
-        activatedSkills: [],
       },
     },
     id: randomUUID(),
