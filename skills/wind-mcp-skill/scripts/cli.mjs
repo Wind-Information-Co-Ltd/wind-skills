@@ -288,39 +288,16 @@ function normalizeIndexes(indexes) {
   return indexes.split(',').map((item) => INDICATOR_ALIASES.get(normalizeIndicatorKey(item)) || item.trim()).filter(Boolean).join(',');
 }
 
-function looksLikeFundCode(code) {
-  return /^5\d{5}\.SH$/.test(code) || /^1[56]\d{4}\.SZ$/.test(code) || /^\d{6}\.OF$/.test(code);
-}
-
-function looksLikeIndexCode(code) {
-  return /^(\d{6})\.(CSI|WI|MI|HI|GI)$/.test(code) ||
-    /^(000300|000905|000852|000016|000001)\.SH$/.test(code) ||
-    /^(399001|399006|399300)\.SZ$/.test(code) ||
-    /^[A-Z]{2,10}\.(HI|GI)$/.test(code);
-}
-
 function normalizeWindcode(windcode) {
   if (typeof windcode !== 'string') return windcode;
   const raw = windcode.trim();
-  const alias = INDEX_CODE_ALIASES.get(raw.toUpperCase());
-  if (alias) return alias;
   const upper = raw.toUpperCase();
-  if (/^\d{4}\.HK$/.test(upper)) return `0${upper}`;
-  if (looksLikeIndexCode(upper)) return upper;
-  if (/^\d{6}$/.test(upper)) {
-    if (/^9\d{5}$/.test(upper)) return `${upper}.BJ`;
-    if (/^5\d{5}$/.test(upper)) return `${upper}.SH`;
-    if (/^1[56]\d{4}$/.test(upper)) return `${upper}.SZ`;
-    if (/^(000300|000905|000852|000016|000001)$/.test(upper)) return `${upper}.SH`;
-    if (/^399\d{3}$/.test(upper)) return `${upper}.SZ`;
-    if (/^[036]\d{5}$/.test(upper)) return `${upper}.${upper.startsWith('6') ? 'SH' : 'SZ'}`;
-  }
-  if (/^5\d{5}\.SZ$/.test(upper)) return upper.replace(/\.SZ$/, '.SH');
-  if (/^1[56]\d{4}\.SH$/.test(upper)) return upper.replace(/\.SH$/, '.SZ');
-  if (/^[03]\d{5}\.SH$/.test(upper)) return upper.replace(/\.SH$/, '.SZ');
-  if (/^6\d{5}\.SZ$/.test(upper)) return upper.replace(/\.SZ$/, '.SH');
-  if (/^9\d{5}\.(SH|SZ)$/.test(upper)) return upper.replace(/\.(SH|SZ)$/, '.BJ');
-  if (/^[A-Z]{1,5}$/.test(upper)) return `${upper}.O`;
+  const alias = INDEX_CODE_ALIASES.get(upper);
+  if (alias) return alias;
+  if (/^\d{4}\.HK$/.test(upper)) return upper;
+  if (/^\d{5}\.HK$/.test(upper)) return upper;
+  if (/^\d{6}\.(SH|SZ|BJ|OF)$/.test(upper)) return upper;
+  if (/^[A-Z]{1,5}\.(O|N|A|HK|SH|SZ|BJ)$/.test(upper)) return upper;
   return upper;
 }
 
@@ -329,16 +306,6 @@ function toolFamily(toolName) {
   if (KLINE_TOOLS.has(toolName)) return 'kline';
   if (QUOTE_TOOLS.has(toolName)) return 'quote';
   return null;
-}
-
-function inferServerTypeFromWindcode(currentServerType, windcode) {
-  if (typeof windcode !== 'string') return currentServerType;
-  if (looksLikeFundCode(windcode)) return 'fund_data';
-  if (looksLikeIndexCode(windcode)) return 'index_data';
-  if (/^\d{4,5}\.HK$/.test(windcode) || /^[A-Z]{1,5}\.(O|N|A|HK|SH|SZ|BJ)$/.test(windcode) || /^\d{6}\.(SH|SZ|BJ)$/.test(windcode)) {
-    return 'stock_data';
-  }
-  return currentServerType;
 }
 
 function normalizeCall(server_type, toolName, args) {
@@ -352,8 +319,7 @@ function normalizeCall(server_type, toolName, args) {
     normalizedArgs.period = PERIOD_ALIASES.get(key) || normalizedArgs.period.trim();
   }
   const family = toolFamily(toolName);
-  if (family && typeof normalizedArgs.windcode === 'string') {
-    server_type = inferServerTypeFromWindcode(server_type, normalizedArgs.windcode);
+  if (family) {
     toolName = TOOL_BY_DOMAIN[family]?.[server_type] || toolName;
   }
   return { server_type, toolName, args: normalizedArgs };
@@ -462,8 +428,12 @@ function getApiKey() {
 
 const ERROR_PATTERNS = [
   ['TEMPORARILY_UNAVAILABLE', /temporarily_unavailable/i, '后端偶发不可用。'],
-  ['INVALID_PARAM_VALUE', /invalid_param_value/i, '后端参数值错误。'],
-  ['INVALID_PARAM_NAME', /invalid_param_name/i, '后端参数名错误。'],
+  ['EDB_INDICATOR_NOT_FOUND', /未找到匹配的(?:经济)?指标|indicator_not_found/i, 'EDB 未找到用户想查询的指标。'],
+  ['MARKET_TARGET_NOT_FOUND', /market_target_not_found|NER-API error.*(?:识别合并后无结果|请确认输入内容是否包含实体)|comm_exception.*NER-API|未识别实体|未识别到有效的金融标的|ner_error/i, '行情类查询对象未识别。'],
+  ['PARAM_TYPE_ERROR', /attribute_error|(?:'list' object has no attribute '(?:split|strip)')|(?:list object has no attribute (?:split|strip))/i, '参数类型错误：列表传给了只接受字符串的字段。'],
+  ['PERIOD_PARSE_ERROR', /srv_internal_error|For input string:\s*\\?["\x27]?(?:day|daily|monthly|week|weekly|month|D|M|W)\\?["\x27]?/i, 'K 线周期值无法解析。'],
+  ['INVALID_PARAM_VALUE', /invalid_param_value|Invalid value .* for field|参数值.*不合法|参数值错误/i, '后端参数值错误。'],
+  ['INVALID_PARAM_NAME', /invalid_param_name|缺少必填参数|missing required/i, '后端参数名错误。'],
   ['QUOTA_ERROR', /单日请求次数超限|daily.*limit|余额不足|请先充值|insufficient.*balance|请求过于频繁|qps.*limit|too.*frequent/i, '额度/限流错误。等待额度刷新、换备用 Key 或充值后原样重试。'],
   ['AUTH_ERROR', /密钥无效|key.*invalid|unauthorized|认证失败|auth.*fail/i, '认证/权限错误。按 Key 机制修复后原样重试。'],
   ['NO_RESULTS', /未获取到数据|"NO_RESULTS"|no\s*results?|not\s*found|empty\s*result/i, '未获取到匹配数据。先在不改变用户意图的前提下调整关键词或参数。'],
@@ -483,7 +453,7 @@ function inferErrorCode(msg) {
 // agent_action = 诊断 + 行动 一体的 NL 处方; 唯一总表在 references/error-codes.json
 function loadAgentActions() {
   const fallback = {
-    UNKNOWN: '未知错误。不要盲目重试；先查看当前错误详情，能定位本地问题（参数 / 配置 / 网络）则修正后重试一次，无法定位则保留原文告知用户并停止。',
+    UNKNOWN: '未归类错误，不代表参数、工具或标的可修复。禁止原样重试、猜测参数、切换工具或扩大查询；先保留 detail 原文并判断是否属于本地命令/参数/认证/网络问题。只有能明确定位且有确定修正项时才允许修正后重试一次；无法明确定位则停止并将 detail 原文告知用户。',
   };
   try {
     const doc = JSON.parse(readFileSync(ERROR_CODES_PATH, 'utf8'));
@@ -669,7 +639,8 @@ async function cmdCall(server_type, toolName, paramsJson) {
   const validationErrors = validateBasicParams(args);
   validationErrors.push(...validateToolParams(toolName, args));
   if (validationErrors.length > 0) {
-    die('PARAM_VALIDATION_ERROR', validationErrors.join('；'));
+    const hasTypeError = validationErrors.some((message) => message.includes('必须是字符串'));
+    die(hasTypeError ? 'PARAM_TYPE_ERROR' : 'PARAM_VALIDATION_ERROR', validationErrors.join('；'));
   }
 
   const result = await mcpInitializeAndCall(server_type, 'tools/call', {

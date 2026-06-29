@@ -18,8 +18,6 @@ description: 平台 skill 清单本地副本。由 npx skills update -g -y 随 w
 | --------------------- | ------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | wind-mcp-skill        | 数据-行情/基金/股票/宏观/文档         | API Key        | 访问万得 Wind 金融数据:A 股 / 港股股票(行情与财务) + ETF / 公募基金(行情与全维数据) + 公司公告 + 财经新闻 + 宏观经济指标                |
 | wind-alice            | Alice 专业金融分析 Agent              | API Key        | Alice 综合分析入口,适合事实核验、公司一页纸、调研问题清单、财报点评、主题选股、基金分析、宏观/债券/信用分析、市场规模测算和可比公司分析 |
-| ifind-finance-data    | 数据-行情/基金/宏观/新闻公告/智能选股 | API Key        | 访问同花顺 iFinD 金融数据:股票、基金、宏观经济、行业经济、新闻公告,并支持智能选股、选基与指标搜索                                       |
-| mx-finance-data       | 数据-结构化查询/行情/财务/估值/多资产 | 依赖 + API Key | 访问东方财富数据库:覆盖 A 股 / 港股 / 美股、基金、债券等多资产结构化数据,输出 xlsx 与结果说明文件                                       |
 | tushare-finance-skill | 数据-行情/财务/宏观/多资产            | 依赖 + Token   | 访问 Tushare Pro 金融数据:覆盖 A 股、港股、美股、基金、期货、债券、财务报表与宏观经济指标                                               |
 
 ---
@@ -96,26 +94,68 @@ description: 平台 skill 清单本地副本。由 npx skills update -g -y 随 w
 | position_sizing_decision_skill       | 交易执行/仓位            | 无         | 按风险预算和波动水平给出单笔仓位与分批建议                                                                                              |
 | stop_loss_discipline_skill           | 交易执行                 | 无         | 设计价格、逻辑、时间三类止损规则与执行动作                                                                                              |
 | take_profit_ladder_skill             | 交易执行                 | 无         | 为盈利仓设计分层兑现、保本上移与尾仓持有规则                                                                                            |
+| add_to_winner_decision_skill         | 交易执行/仓位                  | 无          | 判断盈利仓是否适合继续加仓，并给出加仓前提、节奏安排、保护规则与停止扩张边界 |
+| after_close_watchlist_recap_skill    | 复盘/自选股                   | 无          | 收盘后总结自选股当日表现、驱动因素、强弱分化与次日观察点 |
+| breakout_trade_execution_skill       | 交易执行                     | 无          | 围绕突破交易制定从观察、触发、跟进到失效处理的落地执行方案 |
+| buyback_program_reviewer_skill       | 事件/公告/财报文档               | 无          | 判断回购计划的规模、动机、执行约束与真实利好程度 |
+| canslim_growth_scan_skill            | 选股                       | 无          | 依据 CANSLIM 成长股框架批量筛选业绩、预期、相对强度与供需结构共振的强势标的 |
+| daily_watchlist_morning_brief_skill  | 复盘/自选股                   | 无          | 为自选股生成盘前简报，汇总隔夜公告、新闻、价格变化、事件日程与今日观察重点 |
+| dip_buy_decision_skill               | 交易执行                     | 无          | 判断下跌或回调中的个股是否值得承接，并给出观察区、试错条件、分批节奏与放弃标准 |
+| dividend_change_explainer_skill      | 事件/公告/财报文档               | 无          | 解读分红提升、削减、暂停或恢复背后的原因、持续性与投资含义 |
+| dividend_growth_entry_skill          | 选股                       | 无          | 寻找股息持续增长、经营质量稳定且估值回落到合理区间的候选股 |
+| earnings_calendar_planner_skill      | 事件/公告/财报文档               | 无          | 按时间轴组织财报季中的重点公司、前后任务、优先级与提醒 |
+| earnings_momentum_setup_skill        | 选股                       | 无          | 寻找财报发布后业绩与指引共同强化、量价表现积极、具备继续上行动能的机会股 |
+| earnings_preview_skill               | 事件/公告/财报文档               | 无          | 财报前梳理市场预期、关键看点、验证指标、情景推演与风险点 |
+| earnings_reaction_interpreter_skill  | 事件/公告/财报文档               | 无          | 解读财报发布后的涨跌反应、超预期来源、市场真实分歧与后续观察点 |
+| failed_breakout_exit_skill           | 交易执行                     | 无          | 识别突破失败、冲高回落与关键位失守后的撤退信号，并给出减仓、止损与重新观察顺序 |
+| gap_open_interpreter_skill           | 盘中异动/交易判断                | 无          | 解读高开、低开、跳空缺口背后的预期差、事件含义与日内风险点 |
+| growth_quality_check_skill           | 个股研究                     | 无          | 拆解公司增长来源，检查盈利含量、现金含量、可持续性与失速风险 |
+| hot_stock_quick_read_skill           | 个股研究                     | 无          | 在极短时间内解释热门股的业务、催化、市场预期、资金关注点与主要风险 |
+| industry_chain_signal_skill          | 市场主线                     | 无          | 从产业链上下游景气、价格、订单、库存与盈利变化中识别机会与风险 |
+| intraday_abnormal_move_alert_skill   | 盘中异动/交易判断                | 无          | 识别盘中急拉、急跌、放量、换手突变等异常波动，并解释可能驱动与持续性 |
+| macro_event_market_impact_skill      | 市场主线                     | 无          | 解读利率、通胀、就业、增长等宏观事件对股市、风格和行业的影响路径 |
+| management_quality_check_skill       | 个股研究                     | 无          | 检查管理层背景、激励机制、资本配置、治理质量与潜在红旗信号 |
+| market_breadth_health_skill          | 市场主线                     | 无          | 判断指数涨跌背后是否有足够市场广度支撑，识别健康扩散、局部抱团或虚弱反弹 |
+| market_sentiment_temperature_skill   | 市场主线                     | 无          | 量化市场情绪冷热、风险偏好与交易拥挤度，辅助仓位和节奏判断 |
+| northbound_capital_flow_skill        | 市场主线                     | 无          | 追踪北向资金或外资偏好的变化、行业流向与风格迁移 |
+| pead_opportunity_skill               | 选股                       | 无          | 识别财报后漂移行情中值得跟踪的中短线机会，判断预期修正、价格延续与失效边界 |
+| policy_headline_interpreter_skill    | 市场主线                     | 无          | 解读政策新闻对行业、题材和个股的影响路径、受益方向与执行不确定性 |
+| premarket_trade_checklist_skill      | 交易执行                     | 无          | 开盘前核查候选交易的催化剂、流动性、计划完整性、环境适配与风险暴露 |
+| price_target_reach_alert_skill       | 交易执行                     | 无          | 当股价接近、触达或穿越目标价时，生成分批处理、继续持有或重新评估建议 |
+| shareholder_letter_digest_skill      | 事件/公告/财报文档               | 无          | 总结股东信中的长期战略、经营变化、资本配置与管理层信号 |
+| stock_first_look_skill               | 个股研究                     | 无          | 首次接触个股时，快速建立业务、市场关注点、关键指标、估值位置与主要风险认知 |
+| stock_research_memo_writer_skill     | 个股研究                     | 无          | 生成结构化、可分享的个股研究备忘录，沉淀投资逻辑、核心分歧、估值判断与风险 |
+| support_break_warning_skill          | 交易执行                     | 无          | 围绕支撑位、压力位、前高前低、趋势线等关键价格位置生成预警与应对提示 |
+| theme_heat_tracker_skill             | 市场主线                     | 无          | 跟踪主题题材热度变化、扩散层级、拥挤程度与持续性 |
+| trading_halt_resume_tracker_skill    | 事件/公告/财报文档               | 无          | 跟踪停牌、临停、复牌事件的原因、进展、潜在影响与复牌后观察框架 |
+| trim_or_hold_decision_skill          | 交易执行                     | 无          | 在持仓明显盈利或短期大涨后，判断应部分兑现还是继续持有 |
+| turnaround_story_validation_skill    | 个股研究                     | 无          | 验证困境公司是否真的出现反转证据，拆解修复路径、时间窗口、失败边界与赔率条件 |
+| value_dividend_candidate_skill       | 选股                       | 无          | 筛选估值具备安全边际、股息有吸引力且分红可持续的收益型股票 |
+| vcp_breakout_scan_skill              | 选股                       | 无          | 筛选波动逐级收缩、抛压减弱、结构趋于成熟的突破预备股 |
+| volume_spike_reasoning_skill         | 盘中异动/交易判断                | 无          | 对股票盘中或日内放量异动进行归因，判断消息驱动、资金行为、情绪扩散或技术性放量 |
+| watchlist_news_impact_digest_skill   | 复盘/自选股                   | 无          | 汇总自选股在指定时间窗口内的重要新闻、公告与舆情变化，并判断影响方向 |
 | wind-alice                           | Alice 专业金融分析 Agent | API Key    | Alice 综合分析入口,适合事实核验、公司一页纸、调研问题清单、财报点评、主题选股、基金分析、宏观/债券/信用分析、市场规模测算和可比公司分析 |
 
 ---
 
-## category 索引(用户问"探索"时用)
+## category 索引(用户问“探索”时使用)
 
 | category                      | 含 skill 数 | 代表 skill                           |
 | ----------------------------- | ----------- | ------------------------------------ |
 | 数据-行情/基金/股票/宏观/文档 | 4           | wind-mcp-skill                       |
 | Alice 专业金融分析 Agent      | 1           | wind-alice                           |
 | 估值                          | 4           | dcf-model                            |
-| 个股研究                      | 5           | equity-investment-thesis             |
-| 事件/公告/财报文档            | 4           | major_announcement_impact_skill      |
-| 市场主线                      | 7           | a-share-primary-theme-identification |
-| 选股                          | 4           | breakout_candidate_finder_skill      |
-| 复盘                          | 1           | post-market-debrief                  |
-| 仓位                          | 2           | position-sizer                       |
-| 交易执行                      | 4           | trade_plan_builder_skill             |
+| 个股研究                      | 11          | stock_first_look_skill               |
+| 事件/公告/财报文档            | 11          | earnings_preview_skill               |
+| 市场主线                      | 14          | market_breadth_health_skill          |
+| 选股                          | 10          | canslim_growth_scan_skill            |
+| 复盘/自选股                   | 4           | after_close_watchlist_recap_skill    |
+| 仓位                          | 3           | position_sizing_decision_skill       |
+| 交易执行                      | 12          | premarket_trade_checklist_skill      |
+| 盘中异动/交易判断             | 3           | intraday_abnormal_move_alert_skill   |
 | 回测                          | 1           | backtest-expert                      |
 | Avatar 思维框架               | 4           | avatar-charlie-munger-thinking       |
+
 
 ---
 
