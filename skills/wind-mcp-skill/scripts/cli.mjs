@@ -6,7 +6,7 @@ import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
-const SKILL_VERSION = '1.9.3';
+const SKILL_VERSION = '1.9.6';
 
 // 本地 registry: 工具选择可在任何网络调用前失败
 const SERVERS = {
@@ -49,6 +49,7 @@ const UPDATE_CHECK_PATH = join(SKILL_DIR, 'scripts', 'update-check.mjs');
 const TOOL_MANIFEST_PATH = join(SKILL_DIR, 'references', 'tool-manifest.json');
 const ERROR_CODES_PATH = join(SKILL_DIR, 'references', 'error-codes.json');
 const NORMALIZATION_RULES_PATH = join(SKILL_DIR, 'references', 'normalization-rules.json');
+const TOOL_VALIDATION_RULES_PATH = join(SKILL_DIR, 'references', 'tool-validation-rules.json');
 const SKILL_NAME = basename(SKILL_DIR);
 
 const CALL_EXAMPLES = [
@@ -61,7 +62,7 @@ const CALL_EXAMPLES = [
   `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O"}'`,
   `cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"20260401","end_date":"20260430"}'`,
   `cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":3}'`,
-  `cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国GDP","endDate":"20261231"}'`,
+  `cli.mjs call economic_data natural_language_get_edb_data '{"executionMode":"searchFetch","question":"中国GDP","observation":"10"}'`,
   `cli.mjs call analytics_data get_financial_data '{"question":"查询中国A股市场过去一年的平均成交量"}'`,
 ];
 
@@ -239,16 +240,13 @@ function validateToolSelection(server_type, toolName) {
   }
 }
 
-const BASIC_TEXT_KEYS = ['question', 'query', 'metricIdsStr', 'windcode', 'indexes', 'freq', 'magnitude', 'currency'];
-const BASIC_NO_WHITESPACE_KEYS = ['query', 'metricIdsStr'];
-const BASIC_DATE_KEYS = ['begin_date', 'end_date', 'beginDate', 'endDate', 'date', 'tradeDate'];
 const PRICE_INDICATOR_TOOLS = new Set(['get_stock_price_indicators', 'get_fund_price_indicators', 'get_index_price_indicators']);
-const KLINE_TOOLS = new Set(['get_stock_kline', 'get_fund_kline', 'get_index_kline']);
 const QUOTE_TOOLS = new Set(['get_stock_quote', 'get_fund_quote', 'get_index_quote']);
-const EDB_TOOLS = new Set(['get_economic_data']);
-const EDB_FREQ_VALUES = new Set(['日', '工作日', '周', '月', '季', '半年', '年', '年度']);
-const EDB_MAGNITUDE_VALUES = new Set(['个', '千', '万', '百万', '千万', '亿', '十亿', '百亿', '千亿', '万亿']);
-const EDB_CURRENCY_VALUES = new Set(['USD', 'CNY', 'EUR', 'JPY', 'AUD', 'GBP', 'CHF', 'CAD', 'SGD', 'BYR', 'HKD', 'MYR']);
+const EDB_EXECUTION_MODE_ALIASES = new Map([
+  ['仅搜索', 'search'],
+  ['仅提数', 'fetch'],
+  ['搜索并提数', 'searchFetch'],
+]);
 
 function readNormalizationRules() {
   const rules = JSON.parse(readFileSync(NORMALIZATION_RULES_PATH, 'utf8'));
@@ -269,6 +267,21 @@ const INDICATOR_ALIASES = NORMALIZATION_RULES.indicatorAliases;
 const INDEX_CODE_ALIASES = NORMALIZATION_RULES.indexCodeAliases;
 const LEGACY_TOOL_ALIASES = NORMALIZATION_RULES.legacyToolAliases;
 const TOOL_BY_DOMAIN = NORMALIZATION_RULES.toolByDomain;
+
+function readToolValidationRules() {
+  try {
+    const rules = JSON.parse(readFileSync(TOOL_VALIDATION_RULES_PATH, 'utf8'));
+    return {
+      basic: rules.basic || {},
+      toolRules: Array.isArray(rules.tool_rules) ? rules.tool_rules : [],
+    };
+  } catch (err) {
+    die('UNKNOWN', `工具参数校验规则读取失败: ${err.message}`);
+  }
+}
+
+const TOOL_VALIDATION_RULES = readToolValidationRules();
+const KLINE_TOOLS = new Set(TOOL_VALIDATION_RULES.toolRules.find(rule => rule.name === 'kline')?.tools || []);
 
 function isValidBasicDate(value) {
   if (!/^\d{8}$/.test(value)) return false;
@@ -294,11 +307,14 @@ function normalizeWindcode(windcode) {
   const upper = raw.toUpperCase();
   const alias = INDEX_CODE_ALIASES.get(upper);
   if (alias) return alias;
+  // Keep natural-language names untouched. Wind's backend NER is responsible
+  // for resolving names/aliases; the CLI must not guess exchange suffixes.
+  if (/[\u4e00-\u9fff]/.test(raw)) return raw;
+  if (/^0\d{4}\.HK$/.test(upper)) return upper.slice(1);
   if (/^\d{4}\.HK$/.test(upper)) return upper;
-  if (/^\d{5}\.HK$/.test(upper)) return upper;
   if (/^\d{6}\.(SH|SZ|BJ|OF)$/.test(upper)) return upper;
   if (/^[A-Z]{1,5}\.(O|N|A|HK|SH|SZ|BJ)$/.test(upper)) return upper;
-  return upper;
+  return raw;
 }
 
 function toolFamily(toolName) {
@@ -309,9 +325,13 @@ function toolFamily(toolName) {
 }
 
 function normalizeCall(server_type, toolName, args) {
+  const originalToolName = toolName;
   const legacyTool = LEGACY_TOOL_ALIASES.get(toolName);
   if (legacyTool) [server_type, toolName] = legacyTool;
   const normalizedArgs = { ...args };
+  if (toolName === 'natural_language_get_edb_data' && typeof normalizedArgs.executionMode === 'string') {
+    normalizedArgs.executionMode = EDB_EXECUTION_MODE_ALIASES.get(normalizedArgs.executionMode) || normalizedArgs.executionMode;
+  }
   if (typeof normalizedArgs.indexes === 'string') normalizedArgs.indexes = normalizeIndexes(normalizedArgs.indexes);
   if (typeof normalizedArgs.windcode === 'string') normalizedArgs.windcode = normalizeWindcode(normalizedArgs.windcode);
   if (typeof normalizedArgs.period === 'string') {
@@ -331,7 +351,8 @@ function validateBasicParams(params) {
     return ['params 必须是 JSON object'];
   }
 
-  for (const key of BASIC_TEXT_KEYS) {
+  const basic = TOOL_VALIDATION_RULES.basic;
+  for (const key of basic.string_keys || []) {
     if (!(key in params)) continue;
     if (typeof params[key] !== 'string') {
       errors.push(`字段 '${key}' 必须是字符串`);
@@ -340,58 +361,124 @@ function validateBasicParams(params) {
     }
   }
 
-  for (const key of BASIC_NO_WHITESPACE_KEYS) {
+  for (const key of basic.no_whitespace_keys || []) {
     if (typeof params[key] === 'string' && /\s/.test(params[key])) {
       errors.push(`字段 '${key}' 不得含空格或其它空白字符`);
     }
   }
 
-  if (typeof params.windcode === 'string' && params.windcode.includes(',')) {
-    errors.push("字段 'windcode' 只允许单个标的，禁止逗号拼接多代码");
+  for (const key of basic.single_target_keys || []) {
+    if (typeof params[key] === 'string' && params[key].includes(',')) {
+      errors.push(`字段 '${key}' 只允许单个标的，禁止逗号拼接多代码`);
+    }
   }
 
-  for (const key of BASIC_DATE_KEYS) {
+  for (const key of basic.date_keys || []) {
     if (!(key in params)) continue;
     if (typeof params[key] === 'string' && !isValidBasicDate(params[key])) {
       errors.push(`字段 '${key}' 日期格式错误，要求 yyyyMMdd`);
     }
   }
 
+  for (const rule of basic.ambiguous_market_target_patterns || []) {
+    const value = params[rule.field];
+    if (typeof value !== 'string') continue;
+    if (!new RegExp(rule.pattern).test(value)) continue;
+    errors.push({
+      code: rule.code || 'AMBIGUOUS_MARKET_TARGET',
+      message: renderValidationTemplate(rule.message, { ...params, value }),
+    });
+  }
+
   return errors;
+}
+
+function hasParamValue(params, key) {
+  return params[key] !== undefined && params[key] !== null && params[key] !== '';
+}
+
+function resolveValidationValues(fieldRule) {
+  if (Array.isArray(fieldRule.values)) return fieldRule.values.map(String);
+  if (fieldRule.values_from === 'normalization.kline_periods') return Array.from(KLINE_PERIODS).map(String);
+  return [];
+}
+
+function renderValidationMessage(template, values) {
+  return String(template || '').replace('${values}', values.join('/'));
+}
+
+function renderValidationTemplate(template, params) {
+  return String(template || '').replace(/\$\{([^}]+)\}/g, (_, key) => {
+    const value = params[key];
+    return value === undefined || value === null ? '' : String(value);
+  });
+}
+
+function validationErrorMessage(error) {
+  return typeof error === 'string' ? error : error.message;
+}
+
+function validationErrorCode(error) {
+  return typeof error === 'object' && error?.code ? error.code : null;
 }
 
 function validateToolParams(toolName, params) {
   const errors = [];
-  if (KLINE_TOOLS.has(toolName)) {
-    for (const key of ['windcode', 'begin_date', 'end_date']) {
-      if (!(key in params)) errors.push(`K 线工具缺少必填字段 '${key}'`);
-    }
-    if ('period' in params && !KLINE_PERIODS.has(String(params.period))) {
-      errors.push(`字段 'period' 只能是 ${Array.from(KLINE_PERIODS).join('/')}，日 K 请传 '10'`);
-    }
-    for (const key of ['aftime', 'issusp']) {
-      if (key in params && !new Set(['0', '1']).has(String(params[key]))) {
-        errors.push(`字段 '${key}' 只能是 '0' 或 '1'`);
+  const rules = TOOL_VALIDATION_RULES.toolRules.filter(rule => Array.isArray(rule.tools) && rule.tools.includes(toolName));
+
+  for (const rule of rules) {
+    const ruleLabel = rule.label || rule.name || toolName;
+    if (Array.isArray(rule.allowed)) {
+      const allowedKeys = new Set(rule.allowed);
+      for (const key of Object.keys(params)) {
+        if (!allowedKeys.has(key)) errors.push(`${ruleLabel} 工具不支持字段 '${key}'`);
       }
     }
-  }
-  if (EDB_TOOLS.has(toolName)) {
-    const allowedKeys = new Set(['metricIdsStr', 'beginDate', 'endDate', 'freq', 'magnitude', 'currency']);
-    for (const key of Object.keys(params)) {
-      if (!allowedKeys.has(key)) errors.push(`宏观 EDB 工具不支持字段 '${key}'`);
+
+    for (const key of rule.required || []) {
+      if (!hasParamValue(params, key)) errors.push(`${ruleLabel} 工具缺少必填字段 '${key}'`);
     }
-    if (!params.metricIdsStr) errors.push("宏观 EDB 工具缺少必填字段 'metricIdsStr'");
-    if (params.freq && !EDB_FREQ_VALUES.has(params.freq)) {
-      errors.push("字段 'freq' 只能是 日/工作日/周/月/季/半年/年/年度");
+
+    for (const [field, fieldRule] of Object.entries(rule.enum_fields || {})) {
+      if (!(field in params)) continue;
+      const values = resolveValidationValues(fieldRule);
+      if (!values.includes(String(params[field]))) {
+        errors.push(renderValidationMessage(fieldRule.message, values));
+      }
     }
-    if (params.magnitude && !EDB_MAGNITUDE_VALUES.has(params.magnitude)) {
-      errors.push("字段 'magnitude' 取值不在宏观 EDB 工具枚举内");
+
+    for (const fields of rule.paired || []) {
+      const present = fields.filter(key => hasParamValue(params, key));
+      if (present.length > 0 && present.length < fields.length) {
+        errors.push(`字段 '${fields.join("' 和 '")}' 应成对填写`);
+      }
     }
-    if (params.currency && !EDB_CURRENCY_VALUES.has(params.currency)) {
-      errors.push("字段 'currency' 取值不在宏观 EDB 工具枚举内");
+
+    for (const fields of rule.mutually_exclusive || []) {
+      const present = fields.filter(key => hasParamValue(params, key));
+      if (present.length > 1) {
+        errors.push(`字段 '${fields.join('/')}' 互斥，不应同时填写`);
+      }
     }
-    if (params.beginDate && params.endDate && params.beginDate > params.endDate) {
-      errors.push("字段 'beginDate' 不能晚于 'endDate'");
+
+    for (const [startKey, endKey] of rule.ordered_dates || []) {
+      if (params[startKey] && params[endKey] && params[startKey] > params[endKey]) {
+        errors.push(`字段 '${startKey}' 不能晚于 '${endKey}'`);
+      }
+    }
+
+    for (const [field, patternRule] of Object.entries(rule.patterns || {})) {
+      if (!(field in params)) continue;
+      const pattern = new RegExp(patternRule.pattern);
+      if (!pattern.test(String(params[field]))) {
+        errors.push(patternRule.message || `字段 '${field}' 格式不合法`);
+      }
+    }
+
+    for (const conditional of rule.required_one_of_when || []) {
+      if (!conditional.values?.map(String).includes(String(params[conditional.field]))) continue;
+      const satisfied = conditional.one_of?.some(group => group.every(key => hasParamValue(params, key)));
+      if (!satisfied) errors.push(conditional.message || `字段 '${conditional.field}' 当前取值缺少配套参数`);
     }
   }
   return errors;
@@ -448,6 +535,15 @@ function inferErrorCode(msg) {
     if (pat.test(msg)) return code;
   }
   return 'UNKNOWN';
+}
+
+function inferBusinessErrorCode(inner, serverType) {
+  const body = inner && typeof inner === 'object' ? inner.data : null;
+  if (!body || typeof body !== 'object') return null;
+  if (typeof body.code !== 'number' || body.code === 0) return null;
+  const message = typeof body.message === 'string' ? body.message : JSON.stringify(body);
+  if (serverType === 'economic_data' && body.code === 1003) return ['EDB_INDICATOR_NOT_FOUND', message];
+  return [inferErrorCode(message), message];
 }
 
 // agent_action = 诊断 + 行动 一体的 NL 处方; 唯一总表在 references/error-codes.json
@@ -591,6 +687,11 @@ async function mcpRequest(server_type, method, params, {
         const combined = errCode ? `${errCode}: ${errMsg}` : errMsg;
         die(inferErrorCode(combined), `${combined} (server=${server_type})`);
       }
+      const businessError = inferBusinessErrorCode(inner, server_type);
+      if (businessError) {
+        const [code, msg] = businessError;
+        die(code, `${msg} (server=${server_type})`);
+      }
     }
   }
 
@@ -639,8 +740,10 @@ async function cmdCall(server_type, toolName, paramsJson) {
   const validationErrors = validateBasicParams(args);
   validationErrors.push(...validateToolParams(toolName, args));
   if (validationErrors.length > 0) {
-    const hasTypeError = validationErrors.some((message) => message.includes('必须是字符串'));
-    die(hasTypeError ? 'PARAM_TYPE_ERROR' : 'PARAM_VALIDATION_ERROR', validationErrors.join('；'));
+    const explicitCode = validationErrors.map(validationErrorCode).find(Boolean);
+    const messages = validationErrors.map(validationErrorMessage);
+    const hasTypeError = messages.some((message) => message.includes('必须是字符串'));
+    die(explicitCode || (hasTypeError ? 'PARAM_TYPE_ERROR' : 'PARAM_VALIDATION_ERROR'), messages.join('；'));
   }
 
   const result = await mcpInitializeAndCall(server_type, 'tools/call', {

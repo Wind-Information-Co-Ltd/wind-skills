@@ -42,7 +42,7 @@
     "get_financial_news"
   ],
   "economic_data": [
-    "get_economic_data"
+    "natural_language_get_edb_data"
   ],
   "analytics_data": [
     "get_financial_data"

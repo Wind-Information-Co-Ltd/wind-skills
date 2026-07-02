@@ -1,6 +1,6 @@
 # Wind 指标 / 字段名词典（`indexes` 等指标类入参取值）
 
-> 何时读：入参需要填写 Wind 指标 / 字段名时（如 `indexes`），每次都核对 | 权威于：Wind 指标 / 字段名词典 | 不覆盖：自然语言字段 `question` / `query` / `metricIdsStr`
+> 何时读：入参需要填写 Wind 指标 / 字段名时（如 `indexes`），每次都核对 | 权威于：Wind 指标 / 字段名词典 | 不覆盖：自然语言字段 `question` / `query`
 
 本表是 Wind 指标 / 字段名的**唯一权威词典**。凡入参需要填写指标 / 字段名的调用都以本表为准——
 最常见是 `*_price_indicators` 工具的 `indexes` 参数（股票 / 港美股 / 基金 / 指数共用同一份词典），

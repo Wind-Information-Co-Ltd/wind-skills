@@ -39,10 +39,10 @@
 | `index_data` | `get_index_basicinfo` / `get_index_fundamentals` / `get_index_technicals` | `question`（+`lang`） |
 | `bond_data` | `get_bond_basicinfo` / `get_bond_issuer_info` / `get_bond_market_data` / `get_bond_financial_data` | `question`（+`lang`）；无行情快照工具 |
 | `financial_docs` | `get_company_announcements` / `get_financial_news` | `query`（+`top_k`） |
-| `economic_data` | `get_economic_data` | `metricIdsStr`（+`beginDate` / `endDate` / `freq`…） |
+| `economic_data` | `natural_language_get_edb_data` | `executionMode` + `question`（+`beginDate` / `endDate` 或 `observation`） |
 | `analytics_data` | `get_financial_data` | `question`（+`lang`） |
 
-字段级细节（`indexes` 取值、`period` / `freq` 枚举、日期格式）见下方各工具段落与 `references/indicators.md`。
+字段级细节（`indexes` 取值、`period` 枚举、日期格式）见下方各工具段落与 `references/indicators.md`。
 
 ## 参数签名
 
@@ -53,7 +53,7 @@
 | 基金筛选 | `{question, lang?, version?}` | `fund_data.search_funds` |
 | 专项 NL | `{question, lang?}` | `stock_data`、`fund_data`、`index_data`、`bond_data` NL 工具 |
 | 文档 RAG | `{query, top_k?}` | `financial_docs` 工具 |
-| 宏观 EDB | `{metricIdsStr, ...}` | `economic_data.get_economic_data` |
+| 宏观 EDB | `{executionMode, question, ...}` | `economic_data.natural_language_get_edb_data` |
 | 通用结构化取数 | `{question, lang?}` | `analytics_data.get_financial_data` |
 
 params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口语、其它 API 习惯或通用证券字段名
@@ -65,16 +65,20 @@ params JSON 的 key 必须逐字复制本文件的字段名。不得把用户口
 基金对比时，必须拆成多次同工具调用后合并结果；不要把
 `["000001.SH","399001.SZ"]`、`"000001.SH,399001.SZ"` 或类似形式传给 `windcode`。
 
-`windcode` 优先传用户给出的单个标的名称或代码。Wind 可解析中文名、简称和标准代码，例如：
+`windcode` 优先传用户给出的单个标的名称、简称或代码。Wind 后端会做标的 NER，可解析中文名、简称、裸 6 位代码、裸美股 ticker 和标准代码；没有确定映射时，不得自行给名称、裸 6 位代码或裸 ticker 补交易所后缀，也不得把自然语言标的猜成代码。只有用户明确给出标准代码和市场时，才使用带后缀的 Wind 标准代码，例如：
 
 - A股：`600519.SH`、`8XXXXX.BJ`
-- 港股：`00700.HK`
+- 港股：`0700.HK`、`9988.HK`
 - 美股：`AAPL.O`、`MSFT.O`
 - 场外基金：`005827.OF`
 - ETF / LOF：`588200.SH`、`159915.SZ`
 - 指数：`000300.SH`、`000905.SH`、`HSI.HI`
 
-简称或别名可能映射多个标的时先问用户，不要让后端静默选错。
+简称或别名可能映射多个标的时先问用户，不要让后端静默选错。行情类 NER 失败后，保持同一工具，只把 `windcode` 改成更明确的单个名称或用户确认的标准代码；若原始 `windcode` 是 1-5 位纯大写英文字母，且用户问题明确是美股 / 美国上市公司语境，允许仅在 `MARKET_TARGET_NOT_FOUND` 后改为 `<ticker>.O` 重试一次；台股、日股、韩股、欧股等超出本 skill 覆盖范围的请求不得套用 `.O` 重试；除此之外禁止通过猜测 `.O`、`.N`、`.HK`、`.SH`、`.SZ` 等后缀来重试。
+
+裸 6 位数字代码（如 `000001`）允许原样传给 Wind NER。不得在本地自动补 `.SH`、`.SZ`、`.BJ`、`.OF` 等后缀；返回结果必须以 Wind 返回的 `Wind代码` 为准。若用户要求精确市场/品类或对 Wind 返回标的有疑义，再请用户提供标的全称、市场/品类，或明确 Wind 标准代码。
+
+带 `.HK` 的 5 位港股代码若以 0 开头，CLI 会做安全归一化：只去掉最前面的一个 0，例如 `00700.HK` -> `0700.HK`、`01211.HK` -> `1211.HK`、`03311.HK` -> `3311.HK`。裸数字不做这种处理，仍交给 Wind NER。
 
 ## 股票筛选
 
@@ -194,9 +198,9 @@ CLI 会把 `day` / `D` / `daily` / `日线` 归一为 `period:"10"`，把 `week`
 归一为 `11`，把 `month` / `月线` 归一为 `12`。其它 `period` 值会在本地校验阶段拦截，
 避免后端因 `"day"` / `"D"` 等字符串返回 500。
 
-行情工具会做常见标的归一：港股四位码补前导零；裸美股 ticker 如 `NVDA` 补为 `NVDA.O`；
-`HSI` / `HSI.HK` 补为 `HSI.HI`；ETF / LOF 代码会从 `stock_data` 改路由到 `fund_data`；
-常见指数代码会从 `stock_data` 改路由到 `index_data`。
+行情工具只做安全归一化：去除首尾空白、规范已带后缀代码大小写、映射少量明确指数别名
+（如 `HSI` / `HSI.HK` -> `HSI.HI`）。不会也不应把裸美股 ticker 自动补为 `.O`，不会凭空补
+`.N`、`.HK`、`.SH`、`.SZ` 等交易所后缀；不确定时传用户原始单标的名称，让 Wind NER 识别。仅当裸 ticker 首次 NER 返回 `MARKET_TARGET_NOT_FOUND`，且用户问题明确是美股 / 美国上市公司语境时，才允许按上文规则补 `.O` 重试一次。
 
 ### 分钟行情
 
@@ -281,15 +285,16 @@ CLI 会把 `day` / `D` / `daily` / `日线` 归一为 `period:"10"`，把 `week`
 
 ## 宏观工具
 
-宏观和行业 EDB 指标使用 `economic_data.get_economic_data`。
+宏观和行业 EDB 指标使用 `economic_data.natural_language_get_edb_data`。
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `metricIdsStr` | 是 | 自然语言指标查询，不是指标 ID |
-| `beginDate` / `endDate` | | `yyyyMMdd` |
-| `freq` | | `日`=`1`, `工作日`=`2`, `周`=`3`, `月`=`4`, `季`=`5`, `半年`=`6`, `年`=`7`, `年度`=`8` |
-| `magnitude` | | `个`, `千`, `万`, `百万`, `千万`, `亿`, `十亿`, `百亿`, `千亿`, `万亿` |
-| `currency` | | `USD`, `CNY`, `EUR`, `JPY`, `AUD`, `GBP`, `CHF`, `CAD`, `SGD`, `HKD`, `MYR`, `BYR` |
+| `executionMode` | 是 | 执行模式：`search`/`fetch`/`searchFetch`；也可用中文枚举 `仅搜索`/`仅提数`/`搜索并提数` |
+| `question` | 是 | `search` / `searchFetch` 时填自然语言指标描述，如 `中国GDP`；`fetch` 时填一个或多个 EDB 指标代码，多个代码用英文逗号分隔 |
+| `beginDate` / `endDate` | | 数据提取时间范围，`yyyyMMdd`；与 `observation` 互斥 |
+| `observation` | | 近 N 期数据填数字字符串，如 `10`；全量数据填 `all`；与 `beginDate` / `endDate` 互斥 |
+
+调用约束：`fetch` 或 `searchFetch` 需要返回具体数值数据时，必须显式提供 `beginDate` / `endDate` 或 `observation`。不要只把时间范围写入 `question`。
 
 ## 通用取数兜底
 
@@ -317,8 +322,8 @@ node scripts/cli.mjs call stock_data search_stocks '{"question":"筛选港股中
 node scripts/cli.mjs call fund_data search_funds '{"question":"筛选股票型基金中近一年收益率超20%的产品"}'
 node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅,成交量"}'   # indexes 逐字抄 indicators.md
 node scripts/cli.mjs call stock_data get_stock_kline '{"windcode":"600519.SH","begin_date":"20260401","end_date":"20260430"}'   # 日期 yyyyMMdd，不带 -
-node scripts/cli.mjs call stock_data get_stock_kline '{"windcode":"00700.HK","begin_date":"20260401","end_date":"20260430"}'
+node scripts/cli.mjs call stock_data get_stock_kline '{"windcode":"0700.HK","begin_date":"20260401","end_date":"20260430"}'
 node scripts/cli.mjs call fund_data get_fund_price_indicators '{"windcode":"588200.SH","indexes":"中文简称,最新成交价,IOPV,贴水率"}'
 node scripts/cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":5}'   # query 无空格
-node scripts/cli.mjs call economic_data get_economic_data '{"metricIdsStr":"中国CPI同比","freq":"月","beginDate":"20240101","endDate":"20261231"}'   # 宏观用 beginDate/endDate
+node scripts/cli.mjs call economic_data natural_language_get_edb_data '{"executionMode":"searchFetch","question":"中国CPI同比","beginDate":"20240101","endDate":"20261231"}'   # 宏观提数显式传时间范围
 ```
