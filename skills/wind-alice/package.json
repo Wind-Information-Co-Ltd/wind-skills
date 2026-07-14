@@ -1,6 +1,6 @@
 {
   "name": "wind-alice",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI: 调用万得 Alice Agent（A2A SSE），执行指定 Skill 并流式输出分析结果",
   "type": "module",
   "private": true,
@@ -12,5 +12,8 @@
   "bin": {
     "wind-alice": "./scripts/wind-alice.mjs",
     "wa": "./scripts/wind-alice.mjs"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"__tests__/**/*.test.mjs\""
   }
 }

@@ -1,4 +1,8 @@
 import randomUUID from "./uuidv7.js";
+import {
+  formatLocalFileLink,
+  sanitizeAgentResultTextForDelivery,
+} from "./agentResultSanitize.js";
 import { spawnUpdateCheck } from "./update-check.mjs";
 import {
   createWriteStream,
@@ -17,6 +21,24 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const DEFAULT_API_URL = "https://mcp.wind.com.cn/skills/alice";
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url))); // .../wind-alice
 const WIND_AIFINMARKET_PORTAL = "https://aifinmarket.wind.com.cn";
+
+// 服务端在 agentResult 中给出的 `/project/xxx` 是 Alice 工作区相对路径，需要拼成
+// 完整下载 URL 才能由 CLI 自动拉取：
+//   ${WIND_PROJECT_FILES_PREFIX}<contextId>/project/<filename>
+// 其中 contextId 取自本次请求体里 `params.message.contextId`（与服务端实际采纳的会话一致）。
+// 公开 API 路径前缀（非密钥）；可通过环境变量 WIND_PROJECT_FILES_PREFIX 覆盖。
+const DEFAULT_WIND_PROJECT_FILES_PREFIX = [
+  "https://alice.wind.com.cn",
+  "/weaver/files/",
+  "alice-convo-",
+  "1416751125",
+  "/sessions/",
+].join("");
+const WIND_PROJECT_FILES_PREFIX =
+  process.env.WIND_PROJECT_FILES_PREFIX ?? DEFAULT_WIND_PROJECT_FILES_PREFIX;
+
+// 当前请求的 contextId，供下载阶段把 `/project/...` 相对路径补全为完整 URL；每次请求开始前重置。
+let currentSessionContextId = null;
 
 /**
  * 体验账户当日额度耗尽时，服务端会通过 status-update / UIState 里的
@@ -56,13 +78,14 @@ function logWindTrialQuotaIfPresent(events) {
 }
 
 // 已知 Alice Skill 清单。
-// 触发方式：根据 portal 抓包，服务端通过 prompt 文本前缀来识别 Skill，
-//   text = `Using "<nameEn>" skill:<原 prompt>`
-// 因此请求体里必须用 **英文 Skill 名（nameEn）**。
+// 触发方式：根据 portal 抓包，服务端通过 prompt 文本前缀来识别 Skill：
+//   问句含中文 → `使用「<nameZh>」技能：<原 prompt>`
+//   问句全英文 → `Using "<nameEn>" skill:<原 prompt>`
+// --skill 解析后仍须拿到标准 nameEn / nameZh 才能拼出正确前缀。
 // --skill 参数同时支持中文名（nameZh）和英文名（nameEn）：
 //   - 字面精确匹配 nameEn / nameZh
 //   - normalize 后匹配（忽略大小写/空白/连字符/下划线 等，对中文无副作用）
-//   命中后统一回填 nameEn 拼前缀，避免大小写或中文导致服务端识别失败。
+//   命中后统一回填标准 nameEn / nameZh，拼前缀时按问句语言二选一。
 export const KNOWN_SKILLS = [
   {
     nameZh: "通胀情景债券轮动策略",
@@ -187,16 +210,50 @@ function normalizeSkillName(s) {
 }
 
 /**
+ * 常见口语/误称 → 标准 nameEn。仅收录与某一 KNOWN_SKILLS 项一一对应、
+ * 且用户极易把「产出物名称」（如信用报告）当成 Skill 名的别名。
+ */
+const SKILL_ALIAS_ENTRIES = [
+  {
+    nameEn: "Credit Analysis",
+    aliases: ["信用报告", "信用分析报告", "credit report"],
+  },
+  {
+    nameEn: "Company One-Page Investment Memo",
+    aliases: ["一页纸", "投资备忘", "one pager", "one-pager"],
+  },
+  {
+    nameEn: "Stock DD List",
+    aliases: ["调研问题清单", "调研清单", "dd list"],
+  },
+  {
+    nameEn: "Global Share Quarterly Earnings Review",
+    aliases: ["季报点评", "财报点评", "earnings review"],
+  },
+  {
+    nameEn: "Comps Analysis",
+    aliases: ["可比分析", "comps"],
+  },
+];
+
+const SKILL_ALIAS_MAP = new Map(
+  SKILL_ALIAS_ENTRIES.flatMap(({ nameEn, aliases }) =>
+    aliases.map((alias) => [normalizeSkillName(alias), nameEn]),
+  ),
+);
+
+/**
  * 解析用户传入的 --skill 值，支持中英文。
  * 匹配优先级（命中即停）：
  *   1) 与 nameEn 字面相等（区分大小写）
  *   2) 与 nameZh 字面相等
  *   3) normalize(nameEn) 相等（忽略大小写/空白/连字符/下划线 等）
  *   4) normalize(nameZh) 相等
- * 命中后统一回填 **标准 nameEn**（服务端文本前缀必须用英文名）。
+ *   5) SKILL_ALIAS_MAP 口语/误称别名（如「信用报告」→「信用分析」）
+ * 命中后统一回填 **标准 nameEn / nameZh**（拼前缀时按问句语言二选一）。
  * 未命中返回 { name: 原字符串, matched: false }，调用方据此 [warn] 并按字面值提交。
  */
-function resolveSkillName(input) {
+export function resolveSkillName(input) {
   if (!input) return null;
   const raw = String(input).trim();
   if (!raw) return null;
@@ -217,6 +274,20 @@ function resolveSkillName(input) {
     (s) => normalizeSkillName(s.nameZh) === norm,
   );
   if (fuzzyZh) return { name: fuzzyZh.nameEn, matched: true, entry: fuzzyZh, matchedBy: "nameZh(fuzzy)" };
+
+  const aliasTargetEn = SKILL_ALIAS_MAP.get(norm);
+  if (aliasTargetEn) {
+    const aliasEntry = KNOWN_SKILLS.find((s) => s.nameEn === aliasTargetEn);
+    if (aliasEntry) {
+      return {
+        name: aliasEntry.nameEn,
+        matched: true,
+        entry: aliasEntry,
+        matchedBy: "alias",
+        aliasFrom: raw,
+      };
+    }
+  }
 
   return { name: raw, matched: false, entry: null, matchedBy: null };
 }
@@ -341,15 +412,35 @@ function resubscribeBody({ taskId, contextId, params }) {
   };
 }
 
+/** 问句是否包含中日韩统一表意文字（用于选择中/英文 Skill 前缀）。 */
+export function containsChinese(text) {
+  return /[\u3400-\u9fff]/.test(String(text || ""));
+}
+
+/**
+ * 按问句语言拼 Skill 文本前缀。
+ * @param {string} prompt
+ * @param {{ nameEn: string, nameZh?: string|null }} skill
+ * @returns {string}
+ */
+export function buildSkillPrefixText(prompt, skill) {
+  const nameEn = String(skill?.nameEn || "").trim();
+  const nameZh = String(skill?.nameZh || "").trim();
+  if (containsChinese(prompt) && nameZh) {
+    return `使用「${nameZh}」技能：`;
+  }
+  return `Using "${nameEn}" skill:`;
+}
+
 /**
  * 构造调用 Alice Agent 的请求体。
  * @param {string} prompt    用户原始问题
- * @param {string|null} skillName  英文 Skill 名（如 "Stock DD List"）；null 则直接使用 prompt
+ * @param {{ nameEn: string, nameZh?: string|null }|null} skill  Skill 名；null 则直接使用 prompt
  *
- * 有 skillName 时在 prompt 前拼 `Using "<nameEn>" skill:` 前缀；其余请求参数一致。
+ * 有 skill 时按问句语言拼前缀（中文问句 → 使用「nameZh」技能：；全英文 → Using "nameEn" skill:）。
  */
-function buildBody(prompt, skillName = null) {
-  const text = skillName ? `Using "${skillName}" skill:${prompt}` : prompt;
+function buildBody(prompt, skill = null) {
+  const text = skill ? `${buildSkillPrefixText(prompt, skill)}${prompt}` : prompt;
   return {
     jsonrpc: "2.0",
     method: "message/stream",
@@ -382,6 +473,11 @@ function buildBody(prompt, skillName = null) {
   };
 }
 
+/** @internal 单测：暴露 buildBody 以便断言 Skill 前缀行为。 */
+export function __buildBodyForTesting(prompt, skill = null) {
+  return buildBody(prompt, skill);
+}
+
 function usage() {
   return [
     "wind-alice — 调用万得 Alice Agent，执行指定 Skill 并流式输出分析结果",
@@ -396,6 +492,7 @@ function usage() {
     "  --skill,  -s <SKILL_NAME>   要执行的 Alice Skill 名，**中英文均可**：",
     "                                · 中文：如 \"上市公司调研问题清单\"",
     "                                · 英文：如 \"Stock DD List\"",
+    "                                · 口语别名：如 \"信用报告\" → \"信用分析\"",
     "                              英文部分忽略大小写/空格/连字符/下划线模糊匹配。",
     "                              不传则走 auto。",
     "  --list-skills               列出已知 Skill（等同子命令 list-skills）",
@@ -424,7 +521,7 @@ function printSkillList() {
     "\n用法：wind-alice --prompt \"你的问题\" --skill \"<Skill 名（中/英）>\"",
   );
   console.log(
-    "提示：--skill 支持中文名（nameZh）和英文名（nameEn）；英文部分忽略大小写与空白/连字符/下划线的模糊匹配。命中后统一以英文名拼入文本前缀提交（服务端按英文识别 Skill）。",
+    "提示：--skill 支持中文名（nameZh）、英文名（nameEn）及常见口语别名（如「信用报告」→「信用分析」）；英文部分忽略大小写与空白/连字符/下划线的模糊匹配。问句含中文时前缀为「使用「nameZh」技能：」，全英文时为 Using \"nameEn\" skill:。",
   );
 }
 
@@ -472,6 +569,65 @@ export function extractAgentResultValues(events) {
 }
 
 /**
+ * 从 Alice 服务端的 `result.isError` 形态错误中提取可读文本。
+ *
+ * 服务端在认证失败、余额不足等场景会返回 HTTP 200 + JSON-RPC 响应：
+ *   { jsonrpc: "2.0", result: { isError: true, content: [{ text: "余额不足，请先充值", type: "text" }] } }
+ * 这不是 JSON-RPC 标准的 `error` 字段，旧的 consumeNonStreamBody 无法识别，
+ * 会静默成功退出、用户看不到任何错误提示。
+ *
+ * 返回拼接后的错误文本（可能多段）；非 isError 响应返回 null。
+ */
+export function extractResultErrorText(event) {
+  const result = event?.result;
+  if (!result || typeof result !== "object" || result.isError !== true) {
+    return null;
+  }
+  const parts = Array.isArray(result.content) ? result.content : [];
+  const texts = parts
+    .map((p) => (p && typeof p.text === "string" ? p.text : ""))
+    .filter(Boolean);
+  return texts.length > 0 ? texts.join("\n") : null;
+}
+
+/**
+ * 从 SSE 事件中提取服务端下发的真实 taskId / contextId。
+ * 服务端偶尔会重签发 contextId（如客户端预生成 ID 被拒绝），不刷新会导致
+ * `/project/xxx` 拼出指向错误会话的下载 URL、下载失败。
+ */
+export function extractServerTaskIds(event) {
+  const result = event?.result;
+  if (!result || typeof result !== "object") return null;
+
+  const taskId =
+    (typeof result.taskId === "string" && result.taskId) ||
+    (typeof result.id === "string" && result.id) ||
+    null;
+  const contextId =
+    (typeof result.contextId === "string" && result.contextId) || null;
+
+  if (!taskId || !contextId) return null;
+  return { taskId, contextId };
+}
+
+function refreshSessionContextIdFromEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return;
+  for (const ev of events) {
+    const ids = extractServerTaskIds(ev);
+    if (ids?.contextId) {
+      currentSessionContextId = ids.contextId;
+      return;
+    }
+  }
+}
+
+/** @internal 单测专用：在不发起真实请求的前提下注入当前会话 contextId，
+ *  让 collectDownloadLinks 能把 /project/xxx 拼成完整 URL。生产代码请勿调用。 */
+export function __setSessionContextIdForTesting(ctxId) {
+  currentSessionContextId = ctxId ?? null;
+}
+
+/**
  * 从 agentResult.value 抽出可下载文件链接。
  *
  * 服务端常用以下两种写法（实测来自 portal 输出）：
@@ -506,7 +662,39 @@ const FILE_EXT_WHITELIST = new Set([
 ]);
 
 const MD_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
-const BARE_URL_RE = /https?:\/\/[^\s)<>"'`]+/g;
+// 排除 ] [ ( —— 避免把 `https://.../x.md](/project/x.md` 这类 Markdown 残片吃进 URL
+const BARE_URL_RE = /https?:\/\/[^\s)<>"'`\[\]()]+/g;
+// 形如 `[文件名](/project/xxx.md)` 的相对链接：仅 `/project/...` 这种 Alice 工作区路径
+const PROJECT_REL_LINK_RE = /\[([^\]]+)\]\((\/project\/[^\s)]+)\)/g;
+// 形如 `[文件名](file:///project/xxx.md)` —— Alice 部分场景用 file:// 协议给出工作区路径
+const FILE_SCHEME_PROJECT_LINK_RE =
+  /\[([^\]]+)\]\(file:\/\/\/?(\/project\/[^\s)]+)\)/gi;
+// 正文裸文本中的 `file:///project/xxx.md`（无 markdown 包裹）
+const FILE_SCHEME_PROJECT_PATH_RE =
+  /(?<![/\w-])file:\/\/\/?(\/project\/[^\s`)<>"'，。、:：；\]\(]+\.[A-Za-z0-9]+)/gi;
+// 形如 `/project/xxx.ext` 反引号包裹或正文裸文本中的工作区相对路径：
+// Alice 部分场景下会用反引号或正文直述形式给出报告文件路径，而不是标准的
+// [name](path) markdown 链接，此前 CLI 仅识别 markdown 链接形式，会导致报告附件漏抓 / 不下载。
+// 这里要求：
+//   1) 路径必须以已知扩展名结尾（FILE_EXT_WHITELIST 二次校验），避免抓到任意 /project/... 字符串；
+//   2) lookbehind 排除前缀为 `/` 或字母数字 / `_` / `-` 的位置，从而跳过完整 HTTP URL（如
+//      `https://host/project/xxx.md`）中已包含的 /project 片段，避免与 BARE_URL_RE 重复抓取。
+// 排除 ] ( —— 避免 [/project/x.md](/project/x.md) 中 .md 后的 Markdown 残片被过度匹配
+const PROJECT_REL_PATH_RE =
+  /(?<![/\w-])\/project\/[^\s`)<>"'，。、:：；\]\(]+\.[A-Za-z0-9]+/g;
+
+/**
+ * 把 `/project/xxx` 这种 Alice 工作区相对路径拼成完整下载 URL。
+ * 依赖 currentSessionContextId（由本次请求的 message.contextId 注入）。
+ * 没有 contextId 时返回 null，调用方据此跳过。
+ */
+function buildSessionProjectFileUrl(relativePath) {
+  if (!currentSessionContextId) return null;
+  let path = String(relativePath || "").trim();
+  if (!path) return null;
+  if (!path.startsWith("/")) path = "/" + path;
+  return `${WIND_PROJECT_FILES_PREFIX}${currentSessionContextId}${path}`;
+}
 
 function deriveFilenameFromUrl(url, fallback) {
   try {
@@ -525,6 +713,8 @@ function looksLikeFileUrl(url) {
     return false;
   }
   if (path.includes("/files/")) return true;
+  // 拒绝 pathname 含 Markdown 残片的畸形 URL（如 .../x.md](/project/x.md）
+  if (/[\]\(\[]/.test(path)) return false;
   const lastDot = path.lastIndexOf(".");
   if (lastDot === -1) return false;
   const ext = path.slice(lastDot + 1).toLowerCase();
@@ -554,6 +744,58 @@ export function collectDownloadLinks(value) {
     if (found.has(url)) continue;
     if (!looksLikeFileUrl(url)) continue;
     found.set(url, deriveFilenameFromUrl(url));
+  }
+
+  // `/project/xxx` 形式的 Markdown 相对链接
+  PROJECT_REL_LINK_RE.lastIndex = 0;
+  while ((m = PROJECT_REL_LINK_RE.exec(text)) !== null) {
+    const [, name, relPath] = m;
+    const fullUrl = buildSessionProjectFileUrl(relPath);
+    if (!fullUrl) continue;
+    if (!looksLikeFileUrl(fullUrl)) continue;
+    if (!found.has(fullUrl)) {
+      found.set(fullUrl, deriveFilenameFromUrl(fullUrl, name));
+    }
+  }
+
+  // `file:///project/xxx` 形式的 Markdown 链接
+  FILE_SCHEME_PROJECT_LINK_RE.lastIndex = 0;
+  while ((m = FILE_SCHEME_PROJECT_LINK_RE.exec(text)) !== null) {
+    const [, name, relPath] = m;
+    const fullUrl = buildSessionProjectFileUrl(relPath);
+    if (!fullUrl) continue;
+    if (!looksLikeFileUrl(fullUrl)) continue;
+    if (!found.has(fullUrl)) {
+      found.set(fullUrl, deriveFilenameFromUrl(fullUrl, name));
+    }
+  }
+
+  // 正文裸文本中的 `file:///project/xxx.ext`
+  FILE_SCHEME_PROJECT_PATH_RE.lastIndex = 0;
+  while ((m = FILE_SCHEME_PROJECT_PATH_RE.exec(text)) !== null) {
+    const relPath = m[1];
+    const dotIdx = relPath.lastIndexOf(".");
+    if (dotIdx === -1) continue;
+    const ext = relPath.slice(dotIdx + 1).toLowerCase();
+    if (!FILE_EXT_WHITELIST.has(ext)) continue;
+    const fullUrl = buildSessionProjectFileUrl(relPath);
+    if (!fullUrl) continue;
+    if (found.has(fullUrl)) continue;
+    found.set(fullUrl, deriveFilenameFromUrl(fullUrl));
+  }
+
+  // 反引号 / 正文裸文本中的 `/project/xxx.ext`
+  PROJECT_REL_PATH_RE.lastIndex = 0;
+  while ((m = PROJECT_REL_PATH_RE.exec(text)) !== null) {
+    const relPath = m[0];
+    const dotIdx = relPath.lastIndexOf(".");
+    if (dotIdx === -1) continue;
+    const ext = relPath.slice(dotIdx + 1).toLowerCase();
+    if (!FILE_EXT_WHITELIST.has(ext)) continue;
+    const fullUrl = buildSessionProjectFileUrl(relPath);
+    if (!fullUrl) continue;
+    if (found.has(fullUrl)) continue;
+    found.set(fullUrl, deriveFilenameFromUrl(fullUrl));
   }
 
   return Array.from(found, ([url, filename]) => ({ url, filename }));
@@ -753,35 +995,55 @@ async function downloadCollectedFiles(apiKey) {
     `=== 检测到 ${items.length} 个可下载文件，正在下载到：${targetDir} ===`,
   );
 
+  const savedPaths = [];
   for (const { url, filename } of items) {
     const targetPath = resolveUniqueTargetPath(targetDir, filename);
     const result = await downloadOneFile({ url, targetPath, apiKey });
     if (result.ok) {
       console.error(`- ${filename}`);
-      console.error(`  已保存：${result.path}`);
+      console.error(`  已保存：${formatLocalFileLink(result.path)}`);
+      savedPaths.push(result.path);
     } else {
       console.error(`- ${filename}`);
       console.error(`  下载失败：${result.error}`);
       console.error(`  原始 URL：${url}`);
     }
   }
+
+  printUserDownloadHints(savedPaths);
 }
 
 async function downloadToFallbackCwd(items, apiKey) {
   const cwd = process.cwd();
   console.error("");
   console.error(`=== 检测到 ${items.length} 个可下载文件，正在下载到当前目录：${cwd} ===`);
+  const savedPaths = [];
   for (const { url, filename } of items) {
     const targetPath = resolveUniqueTargetPath(cwd, filename);
     const result = await downloadOneFile({ url, targetPath, apiKey });
     if (result.ok) {
       console.error(`- ${filename}`);
-      console.error(`  已保存：${result.path}`);
+      console.error(`  已保存：${formatLocalFileLink(result.path)}`);
+      savedPaths.push(result.path);
     } else {
       console.error(`- ${filename}`);
       console.error(`  下载失败：${result.error}`);
       console.error(`  原始 URL：${url}`);
     }
+  }
+
+  printUserDownloadHints(savedPaths);
+}
+
+/**
+ * 在 stderr 打出下载结果日志（供调试用）。
+ * 本地路径已通过 sanitizeAgentResultTextForDelivery 内联到 stdout 正文里，
+ * 不再需要 WIND_ALICE_USER_DOWNLOAD_HINT 机器可读提示。
+ * @param {string[]} savedPaths
+ */
+function printUserDownloadHints(savedPaths) {
+  for (const absPath of savedPaths) {
+    console.error(`  已保存：${formatLocalFileLink(absPath)}`);
   }
 }
 
@@ -789,9 +1051,9 @@ export function formatEventOutput(event) {
   return JSON.stringify(event, null, 2);
 }
 
-export function formatValueOutput(value) {
+export function formatValueOutput(value, downloadDir = "") {
   if (typeof value === "string") {
-    return `agentResult.value: ${value}`;
+    return `agentResult.value: ${sanitizeAgentResultTextForDelivery(value, downloadDir)}`;
   }
   return `agentResult.value: ${JSON.stringify(value, null, 2)}`;
 }
@@ -816,19 +1078,48 @@ function printEvents(events) {
 }
 
 function printAgentResultValues(values) {
+  const { dir: downloadDir } = resolveDownloadDir(SKILL_DIR);
   for (const value of values) {
-    console.log(formatValueOutput(value));
+    console.log(formatValueOutput(value, downloadDir));
   }
 }
 
 /** 单条 emit：先做体验配额扫描，再打印事件 + agentResult.value；
- *  顺便累计 value 中的可下载文件链接，最终在 main 末尾统一提示。 */
-function emitParsedEvents(events) {
+ *  顺便累计 value 中的可下载文件链接，最终在 main 末尾统一提示。
+ *  同时从 SSE 事件中提取服务端下发的真实 contextId，刷新 currentSessionContextId，
+ *  让 `/project/xxx` 相对路径能够拼出有效下载 URL。
+ *  另外扫描 result.isError 形态的服务端错误（认证失败 / 余额不足等），
+ *  命中即打印到 stderr 并置非 0 退出码，避免静默成功退出。 */
+export function emitParsedEvents(events) {
   logWindTrialQuotaIfPresent(events);
+  refreshSessionContextIdFromEvents(events);
   printEvents(events);
+  if (printResultErrors(events)) {
+    process.exitCode = 1;
+    return;
+  }
   const values = extractAgentResultValues(events);
   printAgentResultValues(values);
   accumulateDownloadsFromValues(values);
+}
+
+/**
+ * 扫描事件中的 `result.isError` 服务端错误，把可读文本打印到 stderr。
+ * 命中任意一条即返回 true（调用方据此跳过后续 agentResult 处理并置非 0 退出码）。
+ * 这类错误以 HTTP 200 + JSON-RPC `result`（而非标准 `error` 字段）形式返回，
+ * 旧版只认 `error` 字段，会把这些错误当正常流静默丢弃。
+ */
+function printResultErrors(events) {
+  if (!Array.isArray(events) || events.length === 0) return false;
+  let hit = false;
+  for (const ev of events) {
+    const text = extractResultErrorText(ev);
+    if (text) {
+      console.error(`request failed (result.isError): ${text}`);
+      hit = true;
+    }
+  }
+  return hit;
 }
 
 /** 非流式路径包装：命中体验配额时返回 true，让调用方提前 return。 */
@@ -971,21 +1262,40 @@ async function main() {
     return;
   }
 
-  let skillName = null;
+  let skillForBody = null;
   if (skill && skill.trim()) {
     const resolved = resolveSkillName(skill);
     if (!resolved.matched) {
       console.error(
         `[warn] 未在 KNOWN_SKILLS 中匹配到 Skill "${skill}"（中英文都试过了），将按字面值拼入文本前缀提交；若服务端返回空流请用 \`wind-alice list-skills\` 核对中/英文名。`,
       );
+      const raw = resolved.name;
+      skillForBody = {
+        nameEn: raw,
+        nameZh: containsChinese(raw) ? raw : null,
+      };
+    } else {
+      if (resolved.matchedBy === "alias") {
+        console.error(
+          `[info] --skill "${skill}" 已映射为标准 Skill「${resolved.entry.nameZh}」(${resolved.entry.nameEn})`,
+        );
+      }
+      skillForBody = {
+        nameEn: resolved.entry.nameEn,
+        nameZh: resolved.entry.nameZh,
+      };
     }
-    skillName = resolved.name;
   }
 
   const url = getApiUrl();
   const apiKey = getApiKey();
   const headers = buildHeaders(apiKey);
-  const body = buildBody(prompt, skillName);
+  const body = buildBody(prompt, skillForBody);
+
+  // 让下载阶段能够把 `/project/xxx` 相对路径拼成完整 URL。
+  // 客户端预生成的 contextId 通常会被服务端采纳；即便服务端重签发，
+  // emitParsedEvents 也会从 SSE 事件中提取并覆盖 currentSessionContextId。
+  currentSessionContextId = body?.params?.message?.contextId ?? null;
 
   const MAX_RETRIES = 10;
 
