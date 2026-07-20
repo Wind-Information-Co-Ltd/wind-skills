@@ -215,8 +215,8 @@ CLI 会把 `day` / `D` / `daily` / `日线` 归一为 `period:"10"`，把 `week`
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `windcode` | 是 | | 单个标的名称或代码；禁止数组、多代码字符串或逗号拼接 |
-| `begin` | | `LAST` | `yyyyMMdd` 或 `LAST` |
-| `end` | | `LAST` | `yyyyMMdd` 或 `LAST` |
+| `begin` | | | `yyyyMMdd` |
+| `end` | | | `yyyyMMdd` |
 
 ## 领域 NL 工具
 
