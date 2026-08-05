@@ -1,0 +1,151 @@
+{
+  "schema_version": 13,
+  "description": "Runtime normalization and validation rules for Wind MCP tool calls.",
+  "kline_period_map": {
+    "1min": "1",
+    "5min": "3",
+    "10min": "4",
+    "15min": "5",
+    "30min": "6",
+    "60min": "7",
+    "120min": "8",
+    "240min": "9",
+    "1d": "10",
+    "1w": "11",
+    "1mo": "12",
+    "1y": "13",
+    "1q": "14",
+    "6mo": "15"
+  },
+  "tool_by_domain": {
+    "price": {
+      "stock_data": "get_stock_price_indicators",
+      "fund_data": "get_fund_price_indicators",
+      "index_data": "get_index_price_indicators"
+    },
+    "kline": {
+      "stock_data": "get_stock_kline",
+      "fund_data": "get_fund_kline",
+      "index_data": "get_index_kline"
+    },
+    "quote": {
+      "stock_data": "get_stock_quote",
+      "fund_data": "get_fund_quote",
+      "index_data": "get_index_quote"
+    }
+  },
+  "basic": {
+    "string_keys": [
+      "question",
+      "query",
+      "windcode",
+      "indexes",
+      "executionMode",
+      "observation",
+      "begin_date",
+      "end_date",
+      "begin",
+      "end",
+      "beginDate",
+      "endDate",
+      "date",
+      "tradeDate",
+      "afdate"
+    ]
+  },
+  "tool_rules": [
+    {
+      "name": "question_required",
+      "label": "自然语言",
+      "tools": [
+        "search_stocks",
+        "get_stock_basicinfo",
+        "get_stock_fundamentals",
+        "get_stock_equity_holders",
+        "get_stock_events",
+        "get_stock_technicals",
+        "get_risk_metrics",
+        "search_funds",
+        "get_fund_info",
+        "get_fund_financials",
+        "get_fund_holdings",
+        "get_fund_performance",
+        "get_fund_holders",
+        "get_fund_company_info",
+        "get_index_basicinfo",
+        "get_index_fundamentals",
+        "get_index_technicals",
+        "get_bond_basicinfo",
+        "get_bond_issuer_info",
+        "get_bond_market_data",
+        "get_bond_financial_data",
+        "get_financial_data"
+      ],
+      "required": ["question"]
+    },
+    {
+      "name": "financial_docs_query_required",
+      "label": "金融文档",
+      "tools": ["get_company_announcements", "get_financial_news"],
+      "required": ["query"]
+    },
+    {
+      "name": "kline",
+      "label": "K 线",
+      "tools": ["get_stock_kline", "get_fund_kline", "get_index_kline"],
+      "required": ["windcode", "begin_date", "end_date"],
+      "enum_fields": {
+        "period": {
+          "values_from": "kline_period_map",
+          "message": "字段 'period' 只能是 ${values}，日 K 请传 '1d'"
+        },
+        "aftype": {
+          "values": ["0", "1"],
+          "message": "字段 'aftype' 只能是 '0' 或 '1'"
+        },
+        "issusp": {
+          "values": ["0", "1"],
+          "message": "字段 'issusp' 只能是 '0' 或 '1'"
+        }
+      }
+    },
+    {
+      "name": "quote",
+      "label": "分钟行情",
+      "tools": ["get_stock_quote", "get_fund_quote", "get_index_quote"],
+      "required": ["windcode", "begin", "end"],
+      "paired": [["begin", "end"]],
+      "ordered_dates": [["begin", "end"]]
+    },
+    {
+      "name": "economic_edb",
+      "label": "宏观 EDB",
+      "tools": ["natural_language_get_edb_data"],
+      "allowed": ["executionMode", "question", "beginDate", "endDate", "observation"],
+      "required": ["executionMode", "question"],
+      "enum_fields": {
+        "executionMode": {
+          "values": ["search", "fetch", "searchFetch", "仅搜索", "仅提数", "搜索并提数"],
+          "message": "字段 'executionMode' 只能是 search/fetch/searchFetch 或 仅搜索/仅提数/搜索并提数"
+        }
+      },
+      "paired": [["beginDate", "endDate"]],
+      "mutually_exclusive": [["observation", "beginDate"], ["observation", "endDate"]],
+      "ordered_dates": [["beginDate", "endDate"]],
+      "patterns": {
+        "observation": {
+          "pattern": "^(\\d+|all)$",
+          "message": "字段 'observation' 只能是数字字符串或 'all'"
+        }
+      },
+      "required_one_of_when": [
+        {
+          "field": "executionMode",
+          "values": ["fetch", "searchFetch", "仅提数", "搜索并提数"],
+          "one_of": [["observation"], ["beginDate", "endDate"]],
+          "message": "executionMode 为 fetch/searchFetch 时，必须显式提供 beginDate/endDate 或 observation"
+        }
+      ]
+    }
+  ]
+}

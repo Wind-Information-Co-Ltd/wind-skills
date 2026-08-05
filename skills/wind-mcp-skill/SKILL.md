@@ -1,7 +1,7 @@
 ---
 name: wind-mcp-skill
 description: >-
-  用户查询金融数据时触发：A股选股筛选、行情快照、K 线、分钟行情、财务基本面、股东、事件、技术和风险；港股/美股选股筛选、行情和基本面；基金/ETF/LOF 基金筛选、行情、净值、规模、档案、持仓和业绩；指数/板块行情与基本面；债券档案与估值；上市公司公告、财经新闻、宏观经济和行业指标。不用于台股、日股、韩股、欧股、汇率、期货盘口、加密货币或非金融数据。
+  用户查询金融数据时触发：A股/港股/美股选股筛选、行情快照、K 线、分钟行情、财务基本面、股东、事件、技术和风险；基金/ETF/LOF 基金筛选、行情、净值、规模、档案、持仓和业绩；指数/板块行情与基本面；债券档案与估值；上市公司公告、财经新闻、宏观经济、汇率和行业指标。不用于台股、日股、韩股、欧股、期货盘口、加密货币或非金融数据。
 author: Wind
 homepage: https://aifinmarket.wind.com.cn
 auto_invoke: true
@@ -23,136 +23,95 @@ examples:
   - "中国近10年新能源汽车产销量"
 ---
 
-<!-- ENCODING: UTF-8. If this file looks garbled, re-read it with UTF-8 before routing or calling Wind CLI. -->
+<!-- ENCODING: UTF-8. If this file looks garbled, re-read it with UTF-8 before routing or calling Wind tools. -->
 
 # Wind 万得金融数据
 
-你是 Wind MCP 调用路由器。将用户问题映射到 Wind 支持的
-`server_type + tool_name`，按 `references/tool-contracts.md` 构造参数，调用 CLI，并只基于 Wind 返回结果回答。
+通过本地 CLI 调用 Wind 的 7 个 MCP 服务取数，只基于返回结果回答。只报告 Wind 返回值和必要限制，不补常识、不补点评。
 
-## 不可协商门禁
+每个问题按四步处理：**① 定路由 → ② 发命令 → ③ 读回执 → ④ 收口**。②③ 之间可以往返，但每次往返都受第 3 节的重试边界约束。
 
-按顺序执行；任一门禁不满足，只修当前门禁，不得跳到后续步骤。
+## 1. 定路由
 
-1. **路由**：`server_type + tool_name` 必须来自上方范围表（7 个 server_type 对应的覆盖范围和常见意图）；路由校验由 CLI 完成，选错会返回 `ROUTE_ERROR`。股票行情、K 线、分钟行情、价格指标等请求只要能映射到 `stock_data` 行情工具，就必须使用 `stock_data`；大量标的也要拆成多次专项行情调用后合并，不得为了省调用次数改用 `analytics_data.get_financial_data` 兜底，以免造成不必要的积分消耗。
-2. **参数**：params key 必须逐字来自 `references/tool-contracts.md`。
-3. **参数值**：日期必须是 `yyyyMMdd`；自然语言入参按工具合约原样传递，不得为空或全空白；宏观 EDB 工具的 `question` 允许自然语言短语或 EDB 指标代码。
-4. **单标的**：单次工具调用只允许一个标的；行情类 `windcode` 必须是单个字符串，禁止数组、逗号拼接或多代码字符串。多标的对比拆成多次调用后合并。
-5. **指标**：使用 `indexes` 时，只选择用户明确请求的指标；值必须逐字来自 `references/indicators.md`，不得补充用户未提到的指标。
-6. **命令格式**：首次 CLI 调用前先确认 shell / 执行器类型，按下方「params JSON 写法」表锁定 `<params_json>` 引号。锁定后除非命中 `INVALID_PARAMS_JSON`，不得修改 shell 引号或 JSON 转义。
-7. **失败**：非 0 退出先读 stdout 的 `error.code` 和 `error.agent_action`；`agent_action` 包含完整的域分类和具体操作步骤，直接执行即可。错误只能在对应错误域内修复，不得跨域改动。
-8. **回答**：只报告 Wind 返回值和必要限制，不补常识、不补点评。
+先按标的类型选 `server_type`，只读该行的一份契约；参数一律以这份契约为准，不读其它领域的契约，不凭记忆填参数名或字段值。
 
-**Key 判定规则**：不得手动检查部分配置来源后声称没有 API Key。必须直接执行 CLI；CLI 会一次性按“用户全局配置 > Skill 本地配置 > `WIND_API_KEY` 环境变量”检查全部来源。只有 CLI 返回 `AUTH_ERROR` 且 detail 明确为“未配置”，才能判定 Key 缺失。
+| `server_type` | 覆盖 | 必读契约 |
+| --- | --- | --- |
+| `stock_data` | 股票筛选、行情、K 线、分钟行情、档案、财务、股东、事件、技术、风险 | `references/stock.md` |
+| `fund_data` | 基金 / ETF / LOF 筛选、行情、K 线、分钟行情、档案、财务、持仓、业绩、持有人、公司 | `references/fund.md` |
+| `index_data` | 指数 / 板块行情、K 线、分钟行情、档案、基本面、技术 | `references/index.md` |
+| `bond_data` | 债券档案、发债主体、行情估值、主体财务 | `references/bond.md` |
+| `financial_docs` | 公告、年报、季报、招股书、财经新闻 | `references/financial-docs.md` |
+| `economic_data` | 宏观、行业和汇率 EDB 指标 | `references/economic.md` |
+| `analytics_data` | 跨标的聚合、加权平均、排名、复合指标推导 | `references/analytics.md` |
 
-## 范围
+意图可能多义时按这个顺序仲裁：
 
-| server_type         | 覆盖范围         | 常见意图                                                       |
-| ------------------- | ---------------- | -------------------------------------------------------------- |
-| `stock_data`        | A股 / 港股 / 美股 | 股票筛选、行情、K 线、分钟行情、档案、财务、股东、事件、技术、风险 |
-| `fund_data`         | 基金 / ETF / LOF | 基金筛选、行情、K 线、分钟行情、档案、财务、持仓、业绩、持有人、管理公司 |
-| `index_data`        | 指数 / 板块      | 行情、K 线、分钟行情、档案、基本面、技术                       |
-| `bond_data`         | 债券             | 档案、发债主体、行情估值、主体财务                             |
-| `financial_docs`    | 公告 / 财经新闻  | 年报、季报、公告、招股书、新闻、快讯、报道                     |
-| `economic_data`     | 宏观 / 行业指标  | GDP、CPI、PPI、PMI、社融、利率、失业率、进出口等 EDB 指标      |
-| `analytics_data`    | 通用结构化取数   | 仅在专项路由无法覆盖结构化取数时兜底                           |
+1. 公告、年报、季报、招股书、监管披露 → `financial_docs.get_company_announcements`
+2. 新闻、快讯、报道、评论 → `financial_docs.get_financial_news`
+3. 宏观、行业或汇率 EDB 指标（产销量、CPI、利率、汇率指标等，即使未出现“宏观”字样）→ `economic_data.natural_language_get_edb_data`
+4. 未指定具体标的的筛选请求 → 对应领域的 `search_*`；`analytics_data` 返回计算结果，不返回实体列表。
+5. 最新价、涨跌幅、成交量、K 线、分钟线、区间走势 → 对应领域行情工具；历史区间一律走 K 线。
+6. 财务、股本、股东、事件、技术、风险、持仓、业绩 → 对应领域自然语言工具。
 
-不用于台股、日股、韩股、欧股、其它未覆盖市场、汇率、期货盘口、加密货币或非金融数据。不得用 Web Search、
-`analytics_data` 或 `wind-alice` 伪装支持超范围请求。
+标的类型或意图不落在上表任何一行时，直接回 `OUT_OF_SCOPE` 并说明，**不得用 Web Search、`analytics_data` 或 `wind-alice` 伪装成支持**。
 
-## 工作流
+`analytics_data` 处理跨标的聚合、加权平均、排名和复合指标推导。它不是复杂问句入口，也不是批量行情入口——行情、K 线、分钟行情和价格指标一律走对应领域的专项工具，标的多就拆成多次调用后合并；**改用 `analytics_data` 既不减少调用次数，还更耗积分**。上一次用它取到了数据，不构成下一次跳过专项工具的理由。专项工具因字段、口径或无结果而无法覆盖剩余结构化数据时，才可用它补取。
 
-开始前：若本文件或引用文件出现乱码，先用 UTF-8 重新读取再继续。然后按下面顺序处理每个用户问题。
+涉及行业且用户未指定分类体系时，默认 Wind 行业分类。
 
-1. **分析意图**：判断用户要的是选股筛选、文档 / 新闻、宏观指标、行情或时序、专项业务数据、通用结构化取数，还是超范围请求。
-2. **判断标的类型**：识别 A股、港股、美股、基金 / ETF / LOF、指数 / 板块、债券、文档主体或宏观指标。简称或别名可能歧义时先问用户。
-3. **选择 `server_type`**：用标的类型匹配上方范围表。A股、港股、美股都用 `stock_data`。
-4. **选择 `tool_name`**：按意图在 `references/tool-contracts.md` 中找到对应工具；路由校验由 CLI 完成，选错会返回 `ROUTE_ERROR`。
-5. **构造参数**：只读取所选工具在 `references/tool-contracts.md` 中的段落，逐字使用其中的参数 key，并守住门禁 3 / 4 / 5。自然语言字段对应关系：
-   - 选股筛选、领域 NL 工具和 `analytics_data` 使用 `question`
-   - `financial_docs` 使用 `query`
-   - `economic_data.natural_language_get_edb_data` 使用 `executionMode` + `question`；提数类请求必须显式填写 `beginDate` / `endDate` 或 `observation`
+## 2. 发命令
 
-   涉及行业筛选、行业分类或行业对比，且用户未指定分类体系时，默认使用 Wind 行业分类。
+先 `cd` 到本 `SKILL.md` 所在目录（**不是当前项目目录**），再用相对路径执行：
 
-6. **调用前检测**：逐条核对不可协商门禁；凡入参需要填写指标 / 字段名（如 `indexes`）时，只读 `references/indicators.md` 的相关类别，逐项核对、逐字复制——每次调用都核对一遍，不复用记忆，不添加用户未请求的指标。
-7. **调用 CLI**：调用前必须先 `cd` 到 skill 目录，即本 `SKILL.md` 所在目录、不是当前项目目录，再用相对路径执行 `node scripts/cli.mjs call <server_type> <tool_name> <params_json>`。不 `cd` 会找不到脚本。`<params_json>` 的引号 / 转义以已锁定命令格式为准，见下方「params JSON 写法」表。
-8. **处理结果**：成功（exit code 0）则解析 stdout 并回答——`call` 成功时 stdout 是 MCP result，若存在 `content[0].text`，优先解析其中的文本或 JSON。失败（exit code 1）则执行 `error.agent_action`。每次重试前按下方「重试前审计」核对。
+```bash
+node scripts/cli.mjs call <server_type> <tool_name> '<params_json>'
+```
 
-### 重试前审计
+一个可直接运行的完整例子：
 
-每次重试前必须内部核对：
+```bash
+node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH"}'
+```
 
-- 上一次 `error.code` 是什么。
-- 本次计划修改是否属于该错误码允许的错误域。
-- 是否保持同一 `server_type` 和 `tool_name`；只有 `tool-contracts.md` 证明当前工具无法表达字段 / 口径时才可在同业务域切换。
-- 除非上一次错误是 `INVALID_PARAMS_JSON`，否则不得修改命令引号 / JSON 转义。
-- 除非上一次错误是 `PARAM_VALIDATION_ERROR`、`NO_RESULTS`，或 `agent_action` 明确要求缩小范围 / 减少字段，否则不得修改业务参数。
-- params key 不得来自 `tool-contracts.md` 之外；`indexes` 不得来自 `indicators.md` 之外。
+参数取值一律回契约拿，不得从本例外推。
 
-## 路由顺序
+**参数传递**：POSIX shell 优先传内联 `<params_json>`；非 POSIX 环境（PowerShell / cmd / 经 workbuddy、Codex 等执行器包装）一律将 UTF-8 JSON 参数文件生成到 `scripts/request-<唯一后缀>.json`，以 `@scripts/request-<唯一后缀>.json` 传入，调用后删除。不复用共享文件，不在 skill 根目录生成。
 
-意图可能多义时，优先选择最具体的专项路径：
+**Key**：不得只检查部分配置来源就声称没有 API Key。必须先实跑一次；只有返回 `AUTH_ERROR` 且明确为未配置，才能判定缺失，并按信封中的指引处理。
 
-1. 公告、年报、季报、招股书、监管披露 -> `financial_docs.get_company_announcements`
-2. 新闻、媒体、快讯、报道、评论、消息 -> `financial_docs.get_financial_news`
-3. 宏观或行业 EDB 指标 -> `economic_data.natural_language_get_edb_data`
-4. A股 / 港股 / 美股选股、筛选股票、找出符合条件股票，且用户未指定具体股票 -> `stock_data.search_stocks`
-5. 基金筛选、筛选基金、找出符合条件基金，且用户未指定具体基金 -> `fund_data.search_funds`
-6. 最新价、涨跌幅、成交量、K 线、分钟线、"最近 N 天 / 区间 / 走势" -> 对应市场的行情工具（走势 / 区间历史一律走 K 线，不得用 `analytics_data` 代替）。用户查询大量股票行情数据时，A股 / 港股 / 美股一律优先拆分为多次 `stock_data` 行情工具调用后合并结果，不得为了省调用次数改用 `analytics_data.get_financial_data`，因为该兜底工具可能消耗更多积分。
-7. 财务、股本、股东、事件、技术、风险、持仓、业绩、主体财务 -> 对应领域 NL 工具
-8. 专项路由无法覆盖的结构化取数 -> `analytics_data.get_financial_data`
+**批量与并发**：默认串行（并发 1）。需要对 2 个及以上标的逐项调用时，先只发第一个作为探针，探针以 exit 0 完成且无错误信封，才继续其余；探针失败立即终止该批次，不得把相同调用扩散到其它标的。不同 `server_type + tool_name` 或不同参数结构分别分组，每组各发一次探针。用户明确要求并发时上限 10，命中 `CONCURRENCY_LIMIT_ERROR` 后停止新请求并恢复串行。
 
-`analytics_data` 不是复杂问句入口，也不是批量行情入口。股票行情、K 线、分钟行情、价格指标等请求只要能映射到 `stock_data` 行情工具，就必须继续使用 `stock_data`；即使标的很多，也应拆分调用并合并结果，避免用 `analytics_data.get_financial_data` 兜底造成不必要的积分消耗。只有专项工具无法覆盖剩余结构化数据，或允许的专项路径因字段 /
-口径 / 无结果失败后，才可用它补取并合并结果。单次工具调用只查一个标的；多标的对比拆成多次调用后合并。
+## 3. 读回执
 
-不得将某次 `analytics_data.get_financial_data` 兜底成功视为 `stock_data` 行情工具不可用；后续新的股票行情、K 线、分钟行情、价格指标请求仍必须重新按路由规则优先使用 `stock_data`。
+**成功（exit 0）**：stdout 是结构化数据，直接读；若存在 `content[0].text`，优先解析其中的文本或 JSON。
 
-## params JSON 写法
+- 数值的单位和**量级**以返回体自带的元数据为准：行情类在 `data.unit`，列定义中可能带 `unit`，EDB 在 `meta.unit` 与 `meta.magnitude`。元数据未给出时保留原值并说明单位未知，不得自行换算。
+- `null` 表示缺失或不适用，禁止当作 0（`INVALID` 已由执行器转为 `null`）。
+- 只报告实际返回的行数，返回多个数据块时逐块报告。后端不提供总数，不得依据 `excelTotalCount` 推断完整性、排名全集或分页状态。
+- `cli_meta.warnings` 非空时保留数据并说明警告内容；`UNKNOWN_BACKEND_STATUS_WITH_DATA` 或 `BACKEND_ERROR_WITH_DATA` 按部分成功处理，不得丢弃已返回数据。
+- analytics 返回多个 Step / 数据块时全部保留并分别解释。
 
-调用前先确认命令最终交给哪种 shell / 执行器，按下表写 `<params_json>` 的引号；同一会话锁定一种写法，命中 `INVALID_PARAMS_JSON` 前不改写。
+**失败（非 0 退出）**：先读 stdout 的 `error.code`、`error.details`、`error.retry`、`error.circuit_breaker`、`error.correction`，按其中的指引修复。`circuit_breaker.tripped` 为 true 时立即终止同批剩余调用。
 
-| 执行路径 | `<params_json>` 写法 |
-| --- | --- |
-| Bash / zsh / sh / Git Bash / WSL | `'{"windcode":"600519.SH"}'` |
-| Windows PowerShell | `'{\"windcode\":\"600519.SH\"}'` |
-| cmd.exe | `"{\"windcode\":\"600519.SH\"}"` |
-| agent 工具 / JSON-RPC / 任务运行器等包一层的执行器 | 先按 Bash 式写；命中 `INVALID_PARAMS_JSON` 时按其 agent_action 用 argv 探针校准 |
+**重试前审计**（每次重试前逐条核对）：
 
-判断标准只有一个：第三参数必须能被 Node 当 `process.argv[2]` 读取并 `JSON.parse` 解析。不要凭屏幕显示判断转义对错。
+- 明确上一次的 `error.code`；本次修改必须落在 `error.correction` 允许的字段内。
+- 保持同一 `server_type` 和 `tool_name`；只有当前契约证明该工具无法表达所需字段或口径时，才可在同业务域切换。
+- 除非错误是 `INVALID_PARAMS_JSON`，不得修改命令引号或 JSON 转义。
+- 除非错误是 `PARAM_VALIDATION_ERROR`、`NO_RESULTS`，或 `agent_action` 明确要求缩小范围 / 减少字段，不得改动业务参数；`PARAM_CONFLICT_ERROR` 只消除 `details.fields` 指出的同义字段冲突。
+- 参数名和字段值必须来自当前领域契约。
 
-## 资源导航
+## 4. 收口
 
-| 读取或运行                       | 何时                                                                     | 权威于                           |
-| -------------------------------- | ------------------------------------------------------------------------ | -------------------------------- |
-| `references/tool-contracts.md`   | **MUST**：选定工具后读对应段落                                           | 工具字段、参数、场景、示例       |
-| `references/tool-validation-rules.json` | MAY：更新工具参数校验时                                           | CLI 本地参数校验规则             |
-| `references/indicators.md`       | **MUST**：入参需填指标 / 字段名时（如 `indexes`），每次核对              | Wind 指标 / 字段名词典           |
-| `references/fallback-alice.md`   | MAY：判定可切 `wind-alice` 后                                            | wind-alice 最终兜底流程          |
+标的未识别或 NER 失败时，询问用户准确全称或 Wind 标准代码，不得自行补交易所后缀或把名称猜成代码。参数错误时优先按 `details` 中的期望类型、格式、枚举或字段集修正；无法唯一确定时再询问用户。
 
-引用优先级：CLI stdout 的 `error.code` / `error.agent_action` 是当前失败的直接指令，包含完整的操作步骤；
-业务参数以 `references/tool-contracts.md` 和 `references/indicators.md` 为准；命令传递写法见「params JSON 写法」表。
-不同 reference 看似冲突时，停止重试并说明文档不一致，不得自行选择更方便的解释。
+认证、额度、网络、后端不可用、命令传递、路由错误：直接报告，**不得切 `analytics_data` 或 `wind-alice`**。
 
-## 失败与回答
+`wind-alice` 非必要不使用：仅当所有专项 Wind 路径都因数据覆盖、字段不可用、口径不匹配或无结果失败，且向用户说明已试路径与失败原因并征得同意后，才把用户原始问题原封不动转交；用户拒绝则停止，返回已试路径与关键错误码。客户端未安装 `wind-alice` 时，征得同意后由你直接执行安装命令（不是只告知用户）：`npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-alice -g -y`；国内网络改用镜像 `npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-alice -g -y`；仅安装到当前项目时去掉 `-g`。安装成功后再转交；安装失败时报告命令原始报错，不得静默放弃。
 
-失败处理遵循门禁 7：直接按 `error.agent_action` 执行。`agent_action` 已包含具体操作步骤（如 Key 获取流程、参数修复方向、重试策略等），不需要查阅其它错误文档。
-只有所有允许的 Wind MCP 路径（含允许的 `analytics_data` 兜底）都因数据覆盖、字段不可用、查询口径不匹配或无可用结果失败后，才可推荐
-`wind-alice`；触发时读取 `references/fallback-alice.md` 并先问用户。
-
-不得因以下错误使用 analytics 兜底或 wind-alice：认证、额度、网络、后端不可用、命令传递、路由错误。
-
-回答遵循门禁 8：只返回 Wind 实际数据。若数据时效、缺失字段、报告期滞后、无结果或口径限制会
-影响解释，必须说明。成功返回数据时末尾附上：
+成功返回数据时末尾附上：
 
 > 数据来源于万得 Wind 金融数据服务。
 
-### 完成状态
-
-- `DONE`：Wind 工具成功返回结果，并已标注数据来源。
-- `DONE_WITH_LIMITS`：成功返回部分结果，但存在字段缺失、报告期滞后、口径限制或部分无数据。
-- `NO_RESULTS`：Wind 返回无结果，且已说明尝试路径和可调整方向。
-- `BLOCKED_KEY`：Key 缺失或无效。
-- `BLOCKED_QUOTA`：额度、余额或限流阻塞继续。
-- `BLOCKED_RUNTIME`：网络、后端、CLI 或命令传递错误阻塞继续。
-- `OUT_OF_SCOPE`：用户请求不属于 Wind MCP 支持范围。
+完成状态：`DONE`、`DONE_WITH_LIMITS`、`NO_RESULTS`、`BLOCKED_KEY`、`BLOCKED_QUOTA`、`BLOCKED_RUNTIME`、`OUT_OF_SCOPE`。

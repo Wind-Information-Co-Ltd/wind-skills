@@ -1,35 +1,35 @@
 {
-  "stock_data": [
-    "search_stocks",
+    "stock_data": [
     "get_stock_price_indicators",
-    "get_stock_kline",
-    "get_stock_quote",
-    "get_stock_basicinfo",
-    "get_stock_fundamentals",
-    "get_stock_equity_holders",
+    "get_risk_metrics",
     "get_stock_events",
+    "get_stock_kline",
+    "get_stock_basicinfo",
+    "get_stock_equity_holders",
+    "get_stock_fundamentals",
+    "get_stock_quote",
     "get_stock_technicals",
-    "get_risk_metrics"
+    "search_stocks"
   ],
   "fund_data": [
-    "search_funds",
     "get_fund_price_indicators",
     "get_fund_kline",
-    "get_fund_quote",
-    "get_fund_info",
     "get_fund_financials",
     "get_fund_holdings",
-    "get_fund_performance",
+    "get_fund_company_info",
+    "get_fund_quote",
+    "get_fund_info",
     "get_fund_holders",
-    "get_fund_company_info"
+    "get_fund_performance",
+    "search_funds"
   ],
   "index_data": [
-    "get_index_price_indicators",
-    "get_index_kline",
+    "get_index_technicals",
     "get_index_quote",
-    "get_index_basicinfo",
+    "get_index_kline",
     "get_index_fundamentals",
-    "get_index_technicals"
+    "get_index_price_indicators",
+    "get_index_basicinfo"
   ],
   "bond_data": [
     "get_bond_basicinfo",
