@@ -6,7 +6,7 @@ import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
-const SKILL_VERSION = '2.0.0';
+const SKILL_VERSION = '2.0.1';
 const DEFAULT_TOOL_CONCURRENCY = 1;
 const MAX_TOOL_CONCURRENCY = 10;
 
@@ -61,7 +61,7 @@ const CALL_EXAMPLES = [
   `cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH公司基本档案"}'`,
   `cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅"}'`,
   `cli.mjs call fund_data get_fund_kline '{"windcode":"588200.SH","begin_date":"2026-04-01","end_date":"2026-04-30"}'`,
-  `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O"}'`,
+  `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O","begin":"2026-08-05","end":"2026-08-05"}'`,
   `cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"2026-04-01","end_date":"2026-04-30"}'`,
   `cli.mjs call financial_docs get_financial_news '{"question":"美联储利率政策","top_k":3}'`,
   `cli.mjs call economic_data natural_language_get_edb_data '{"executionMode":"searchFetch","question":"中国GDP","observation":"10"}'`,
@@ -137,8 +137,6 @@ function triggerUpdateCheck() {
     child.unref();
   } catch { }
 }
-
-export { triggerUpdateCheck };
 
 // section: 工具函数
 
@@ -245,8 +243,6 @@ function loadParamsInput(paramsInput) {
   }
 }
 
-export { loadParamsInput };
-
 const RETRY_AFTER_CORRECTION = Object.freeze({ allowed: false, mode: 'after_correction', max_attempts: 0 });
 const RETRY_SAME_REQUEST = Object.freeze({ allowed: true, mode: 'same_request', max_attempts: 1 });
 const RETRY_AFTER_WAIT_3S = Object.freeze({ allowed: true, mode: 'same_request_after_wait', max_attempts: 1, after_ms: 3000 });
@@ -278,7 +274,7 @@ function defineError(agentAction, {
 }
 
 // 错误文案与默认机器策略的唯一总表。调用点可用 metadata 补充本次请求的精确诊断。
-export const ERROR_DEFINITIONS = Object.freeze({
+const ERROR_DEFINITIONS = Object.freeze({
   TEMPORARILY_UNAVAILABLE: defineError(
     '原因：后端临时不可用。处理：保持当前 server_type、tool_name 和参数不变。重试：仅允许原样重试一次，仍失败则停止并告知用户稍后再试。',
     { retry: RETRY_SAME_REQUEST },
@@ -586,23 +582,6 @@ function validateBasicParams(params, toolName) {
       errors.push({ message: `字段 '${key}' 不能为空或全空白`, field: key, issue: 'empty_value', expected: 'non-empty string' });
     }
   }
-
-  for (const key of basic.no_whitespace_keys || []) {
-    if (typeof params[key] === 'string' && /\s/.test(params[key])) {
-      errors.push({ message: `字段 '${key}' 不得含空格或其它空白字符`, field: key, issue: 'invalid_format', expected_format: 'no whitespace' });
-    }
-  }
-
-  for (const rule of basic.ambiguous_market_target_patterns || []) {
-    const value = params[rule.field];
-    if (typeof value !== 'string') continue;
-    if (!new RegExp(rule.pattern).test(value)) continue;
-    errors.push({
-      code: rule.code || 'AMBIGUOUS_MARKET_TARGET',
-      message: renderValidationTemplate(rule.message, { ...params, value }),
-    });
-  }
-
   return errors;
 }
 
@@ -702,18 +681,6 @@ function validateToolParams(toolName, params) {
   }
   return errors;
 }
-
-export {
-  businessPayloadHasUsableData,
-  classifyBusinessResponse,
-  fetchWithRetry,
-  hasUsableData,
-  isExplicitNoDataResult,
-  normalizeCall,
-  normalizeCallSuccess,
-  validateBasicParams,
-  validateToolParams,
-};
 
 // ───── 认证 ─────
 

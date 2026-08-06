@@ -82,6 +82,8 @@ node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"60
 
 **批量与并发**：默认串行（并发 1）。需要对 2 个及以上标的逐项调用时，先只发第一个作为探针，探针以 exit 0 完成且无错误信封，才继续其余；探针失败立即终止该批次，不得把相同调用扩散到其它标的。不同 `server_type + tool_name` 或不同参数结构分别分组，每组各发一次探针。用户明确要求并发时上限 10，命中 `CONCURRENCY_LIMIT_ERROR` 后停止新请求并恢复串行。
 
+价格指标工具（`get_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`）的 `windcode` 支持逗号分隔多个标的，**单次调用最多 50 个**；超过 50 个拆成多批（每批 ≤50）后合并结果。该上限约束"单次调用内的代码数"，与上面的并发上限 10（约束"同时并发的调用数"）相互独立。请求较宽的指标集（`indexes` 字段数较多）时相应减少单批代码数，因为响应体积随"代码数 × 字段数"增长。
+
 ## 3. 读回执
 
 **成功（exit 0）**：stdout 是结构化数据，直接读；若存在 `content[0].text`，优先解析其中的文本或 JSON。
@@ -110,8 +112,10 @@ node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"60
 
 `wind-alice` 非必要不使用：仅当所有专项 Wind 路径都因数据覆盖、字段不可用、口径不匹配或无结果失败，且向用户说明已试路径与失败原因并征得同意后，才把用户原始问题原封不动转交；用户拒绝则停止，返回已试路径与关键错误码。客户端未安装 `wind-alice` 时，征得同意后由你直接执行安装命令（不是只告知用户）：`npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-alice -g -y`；国内网络改用镜像 `npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-alice -g -y`；仅安装到当前项目时去掉 `-g`。安装成功后再转交；安装失败时报告命令原始报错，不得静默放弃。
 
-成功返回数据时末尾附上：
+成功返回数据时末尾附上数据来源声明，语言与用户提问语言保持一致（中文问句用中文，英文问句用英文）：
 
 > 数据来源于万得 Wind 金融数据服务。
+
+> Data sourced from Wind Financial Data Service.
 
 完成状态：`DONE`、`DONE_WITH_LIMITS`、`NO_RESULTS`、`BLOCKED_KEY`、`BLOCKED_QUOTA`、`BLOCKED_RUNTIME`、`OUT_OF_SCOPE`。
