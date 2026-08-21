@@ -1,5 +1,5 @@
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "description": "Runtime normalization and validation rules for Wind MCP tool calls.",
   "kline_period_map": {
     "1min": "1",
@@ -94,14 +94,15 @@
       "label": "K 线",
       "tools": ["get_stock_kline", "get_fund_kline", "get_index_kline"],
       "required": ["windcode", "begin_date", "end_date"],
+      "ordered_dates": [["begin_date", "end_date"]],
       "enum_fields": {
         "period": {
           "values_from": "kline_period_map",
           "message": "字段 'period' 只能是 ${values}，日 K 请传 '1d'"
         },
         "aftype": {
-          "values": ["0", "1"],
-          "message": "字段 'aftype' 只能是 '0' 或 '1'"
+          "values": ["0", "1", "2"],
+          "message": "字段 'aftype' 只能是 '0'（前复权）、'1'（后复权）或 '2'（不复权）"
         },
         "issusp": {
           "values": ["0", "1"],
@@ -113,8 +114,7 @@
       "name": "quote",
       "label": "分钟行情",
       "tools": ["get_stock_quote", "get_fund_quote", "get_index_quote"],
-      "required": ["windcode", "begin", "end"],
-      "paired": [["begin", "end"]],
+      "required": ["windcode"],
       "ordered_dates": [["begin", "end"]]
     },
     {

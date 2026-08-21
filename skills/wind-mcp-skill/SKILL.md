@@ -91,17 +91,17 @@ node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"60
 - 数值的单位和**量级**以返回体自带的元数据为准：行情类在 `data.unit`，列定义中可能带 `unit`，EDB 在 `meta.unit` 与 `meta.magnitude`。元数据未给出时保留原值并说明单位未知，不得自行换算。
 - `null` 表示缺失或不适用，禁止当作 0（`INVALID` 已由执行器转为 `null`）。
 - 只报告实际返回的行数，返回多个数据块时逐块报告。后端不提供总数，不得依据 `excelTotalCount` 推断完整性、排名全集或分页状态。
-- `cli_meta.warnings` 非空时保留数据并说明警告内容；`UNKNOWN_BACKEND_STATUS_WITH_DATA` 或 `BACKEND_ERROR_WITH_DATA` 按部分成功处理，不得丢弃已返回数据。
+- `cli_meta.warnings` 非空时保留数据并说明警告内容。
 - analytics 返回多个 Step / 数据块时全部保留并分别解释。
 
-**失败（非 0 退出）**：先读 stdout 的 `error.code`、`error.details`、`error.retry`、`error.circuit_breaker`、`error.correction`，按其中的指引修复。`circuit_breaker.tripped` 为 true 时立即终止同批剩余调用。
+**失败（非 0 退出）**：stdout 是 `{ "ok": false, "code": "...", "message": "..." }`。本地/网络错误读 `code` 与 `message`；接口错误的 `code` 固定为 `backend_error`，`message` 为接口原文。直接据此向用户说明或修正后重试，不要再找 `retry` / `circuit_breaker` / `correction`。
 
 **重试前审计**（每次重试前逐条核对）：
 
-- 明确上一次的 `error.code`；本次修改必须落在 `error.correction` 允许的字段内。
+- 明确上一次的 `code`。
 - 保持同一 `server_type` 和 `tool_name`；只有当前契约证明该工具无法表达所需字段或口径时，才可在同业务域切换。
 - 除非错误是 `INVALID_PARAMS_JSON`，不得修改命令引号或 JSON 转义。
-- 除非错误是 `PARAM_VALIDATION_ERROR`、`NO_RESULTS`，或 `agent_action` 明确要求缩小范围 / 减少字段，不得改动业务参数；`PARAM_CONFLICT_ERROR` 只消除 `details.fields` 指出的同义字段冲突。
+- 除非错误是 `PARAM_VALIDATION_ERROR`，不得改动业务参数；`PARAM_CONFLICT_ERROR` 只消除冲突字段。
 - 参数名和字段值必须来自当前领域契约。
 
 ## 4. 收口
