@@ -29,7 +29,7 @@ examples:
 
 通过本地 CLI 调用 Wind 的 7 个 MCP 服务取数，只基于返回结果回答。只报告 Wind 返回值和必要限制，不补常识、不补点评。
 
-每个问题按四步处理：**① 定路由 → ② 发命令 → ③ 读回执 → ④ 收口**。②③ 之间可以往返，但每次往返都受第 3 节的重试边界约束。
+每个问题按四步处理：**① 定路由 → ② 发命令 → ③ 读回执 → ④ 收口**。②③ 之间可以按回执里的错误信息修正参数后再调用，每次再调用前都要过一遍第 3 节的自检项。
 
 ## 1. 定路由
 
@@ -49,7 +49,7 @@ examples:
 
 1. 公告、年报、季报、招股书、监管披露 → `financial_docs.get_company_announcements`
 2. 新闻、快讯、报道、评论 → `financial_docs.get_financial_news`
-3. 宏观、行业或汇率 EDB 指标（产销量、CPI、利率、汇率指标等，即使未出现“宏观”字样）→ `economic_data.natural_language_get_edb_data`
+3. 宏观、行业或汇率 EDB 指标（产销量、CPI、利率、汇率指标等，即使未出现“宏观”字样）→ 只需指标元信息/确认代码走 `economic_data.search_economic_indicator`，要具体数值时间序列走 `economic_data.query_economic_indicator_data`
 4. 未指定具体标的的筛选请求 → 对应领域的 `search_*`；`analytics_data` 返回计算结果，不返回实体列表。
 5. 最新价、涨跌幅、成交量、K 线、分钟线、区间走势 → 对应领域行情工具；历史区间一律走 K 线。
 6. 财务、股本、股东、事件、技术、风险、持仓、业绩 → 对应领域自然语言工具。
@@ -80,33 +80,31 @@ node scripts/cli.mjs call stock_data get_stock_price_indicators '{"windcode":"60
 
 **Key**：不得只检查部分配置来源就声称没有 API Key。必须先实跑一次；只有返回 `AUTH_ERROR` 且明确为未配置，才能判定缺失，并按信封中的指引处理。
 
-**批量与并发**：默认串行（并发 1）。需要对 2 个及以上标的逐项调用时，先只发第一个作为探针，探针以 exit 0 完成且无错误信封，才继续其余；探针失败立即终止该批次，不得把相同调用扩散到其它标的。不同 `server_type + tool_name` 或不同参数结构分别分组，每组各发一次探针。用户明确要求并发时上限 10，命中 `CONCURRENCY_LIMIT_ERROR` 后停止新请求并恢复串行。
+**批量与并发**：默认串行（并发 1）。需要对 2 个及以上标的逐项调用时，先只发第一个作为探针，探针成功返回数据、未出现错误信封，才继续其余；探针返回错误信封立即终止该批次，不得把相同调用扩散到其它标的。不同 `server_type + tool_name` 或不同参数结构分别分组，每组各发一次探针。用户明确要求并发时上限 10，一旦某次返回 `RATE_LIMIT_ERROR` 或 `backend_error` 就停止新请求并恢复串行。
 
 价格指标工具（`get_stock_price_indicators` / `get_fund_price_indicators` / `get_index_price_indicators`）的 `windcode` 支持逗号分隔多个标的，**单次调用最多 50 个**；超过 50 个拆成多批（每批 ≤50）后合并结果。该上限约束"单次调用内的代码数"，与上面的并发上限 10（约束"同时并发的调用数"）相互独立。请求较宽的指标集（`indexes` 字段数较多）时相应减少单批代码数，因为响应体积随"代码数 × 字段数"增长。
 
 ## 3. 读回执
 
-**成功（exit 0）**：stdout 是结构化数据，直接读；若存在 `content[0].text`，优先解析其中的文本或 JSON。
+每次调用的 stdout 只有两种形态：成功是数据对象，失败是带 `ok:false` 的错误信封。
+
+**成功**：stdout 是数据对象，后端结果在 `content[0].text` 里（多为 JSON 字符串），CLI 另附一个 `cli_meta`。直接读；若存在 `content[0].text`，优先解析其中的文本或 JSON。
 
 - 数值的单位和**量级**以返回体自带的元数据为准：行情类在 `data.unit`，列定义中可能带 `unit`，EDB 在 `meta.unit` 与 `meta.magnitude`。元数据未给出时保留原值并说明单位未知，不得自行换算。
-- `null` 表示缺失或不适用，禁止当作 0（`INVALID` 已由执行器转为 `null`）。
-- 只报告实际返回的行数，返回多个数据块时逐块报告。后端不提供总数，不得依据 `excelTotalCount` 推断完整性、排名全集或分页状态。
-- `cli_meta.warnings` 非空时保留数据并说明警告内容。
-- analytics 返回多个 Step / 数据块时全部保留并分别解释。
 
-**失败（非 0 退出）**：stdout 是 `{ "ok": false, "code": "...", "message": "..." }`。本地/网络错误读 `code` 与 `message`；接口错误的 `code` 固定为 `backend_error`，`message` 为接口原文。直接据此向用户说明或修正后重试，不要再找 `retry` / `circuit_breaker` / `correction`。
+**失败**：stdout 是 `{ "ok": false, "code": "...", "message": "..." }`。本地/参数/网络类错误的 `code` 指明原因（`AUTH_ERROR`、`PARAMS_FILE_ERROR`、`INVALID_PARAMS_JSON`、`PARAM_TYPE_ERROR`、`PARAM_VALIDATION_ERROR`、`ROUTE_ERROR`、`USAGE_ERROR`、`RATE_LIMIT_ERROR`、`NETWORK_ERROR`、`TOOL_RUNTIME_ERROR`、`SETUP_ERROR`、`UNKNOWN`）；接口层错误的 `code` 固定为 `backend_error`，`message` 为接口原文。据此向用户说明，或按下面的自检修正后再调用。
 
-**重试前审计**（每次重试前逐条核对）：
+**修正后再调用前自检**（逐条核对）：
 
-- 明确上一次的 `code`。
+- 明确上一次的 `code` 与 `message`。
 - 保持同一 `server_type` 和 `tool_name`；只有当前契约证明该工具无法表达所需字段或口径时，才可在同业务域切换。
 - 除非错误是 `INVALID_PARAMS_JSON`，不得修改命令引号或 JSON 转义。
-- 除非错误是 `PARAM_VALIDATION_ERROR`，不得改动业务参数；`PARAM_CONFLICT_ERROR` 只消除冲突字段。
+- 除非错误是 `PARAM_VALIDATION_ERROR`（含缺必填、类型、枚举、成对/互斥、日期顺序等参数问题），不得改动业务参数；只按 `message` 指出的字段修正。
 - 参数名和字段值必须来自当前领域契约。
 
 ## 4. 收口
 
-标的未识别或 NER 失败时，询问用户准确全称或 Wind 标准代码，不得自行补交易所后缀或把名称猜成代码。参数错误时优先按 `details` 中的期望类型、格式、枚举或字段集修正；无法唯一确定时再询问用户。
+标的未识别或 NER 失败时，询问用户准确全称或 Wind 标准代码，不得自行补交易所后缀或把名称猜成代码。参数错误时优先按 `message` 中给出的期望类型、格式、枚举或字段集修正；无法唯一确定时再询问用户。
 
 认证、额度、网络、后端不可用、命令传递、路由错误：直接报告，**不得切 `analytics_data` 或 `wind-alice`**。
 

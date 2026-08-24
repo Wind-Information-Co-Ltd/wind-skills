@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
 // #region 静态：版本、7 个 MCP 地址、路径、HTTP 状态码映射。只含常量，不发网络。
-const SKILL_VERSION = '2.0.2';
+const SKILL_VERSION = '2.0.3';
 
 // 本地 registry: 工具选择可在任何网络调用前失败
 const SERVERS = {
@@ -61,18 +61,14 @@ const CALL_EXAMPLES = [
   `cli.mjs call fund_data get_fund_kline '{"windcode":"588200.SH","begin_date":"2026-04-01","end_date":"2026-04-30"}'`,
   `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O","begin":"2026-08-05","end":"2026-08-05"}'`,
   `cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"2026-04-01","end_date":"2026-04-30"}'`,
-  `cli.mjs call financial_docs get_financial_news '{"question":"美联储利率政策","top_k":3}'`,
-  `cli.mjs call economic_data natural_language_get_edb_data '{"executionMode":"searchFetch","question":"中国GDP","observation":"10"}'`,
+  `cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":3}'`,
+  `cli.mjs call economic_data search_economic_indicator '{"question":"中国GDP相关指标有哪些"}'`,
+  `cli.mjs call economic_data query_economic_indicator_data '{"question":"中国GDP","observation":"10"}'`,
   `cli.mjs call analytics_data get_financial_data '{"question":"查询中国A股市场过去一年的平均成交量"}'`,
 ];
 
 const PRICE_INDICATOR_TOOLS = new Set(['get_stock_price_indicators', 'get_fund_price_indicators', 'get_index_price_indicators']);
 const QUOTE_TOOLS = new Set(['get_stock_quote', 'get_fund_quote', 'get_index_quote']);
-const EDB_EXECUTION_MODE_ALIASES = new Map([
-  ['仅搜索', 'search'],
-  ['仅提数', 'fetch'],
-  ['搜索并提数', 'searchFetch'],
-]);
 
 const HTTP_ERROR_MAP = {
   401: 'AUTH_ERROR',
@@ -412,7 +408,7 @@ const TOOL_VALIDATION_RULES = {
 const KLINE_TOOLS = new Set(TOOL_VALIDATION_RULES.toolRules.find(rule => rule.name === 'kline')?.tools || []);
 // #endregion 规则加载
 
-// #region 规范化：整理 windcode/indexes/period/EDB executionMode。不给中文名称猜交易所后缀。
+// #region 规范化：整理 windcode/indexes/period。不给中文名称猜交易所后缀。
 function normalizeIndexes(indexes) {
   if (typeof indexes !== 'string') return indexes;
   return indexes.split(',').map((item) => item.trim()).filter(Boolean).join(',');
@@ -444,9 +440,6 @@ function normalizeCall(server_type, toolName, args) {
   if (family) toolName = TOOL_BY_DOMAIN[family]?.[server_type] || toolName;
   const normalizedArgs = { ...args };
   const normalizationErrors = [];
-  if (toolName === 'natural_language_get_edb_data' && typeof normalizedArgs.executionMode === 'string') {
-    normalizedArgs.executionMode = EDB_EXECUTION_MODE_ALIASES.get(normalizedArgs.executionMode) || normalizedArgs.executionMode;
-  }
   if (typeof normalizedArgs.indexes === 'string') normalizedArgs.indexes = normalizeIndexes(normalizedArgs.indexes);
   if (typeof normalizedArgs.windcode === 'string') normalizedArgs.windcode = normalizeWindcode(normalizedArgs.windcode);
   if (KLINE_TOOLS.has(toolName) && normalizedArgs.period === undefined) normalizedArgs.period = '1d';
@@ -579,6 +572,11 @@ function validateToolParams(toolName, params) {
       if (!conditional.values?.map(String).includes(String(params[conditional.field]))) continue;
       const satisfied = conditional.one_of?.some(group => group.every(key => hasParamValue(params, key)));
       if (!satisfied) errors.push({ message: conditional.message || `字段 '${conditional.field}' 当前取值缺少配套参数`, field: conditional.field, issue: 'missing_conditional_fields', one_of: conditional.one_of });
+    }
+
+    for (const requirement of rule.required_one_of || []) {
+      const satisfied = requirement.one_of?.some(group => group.every(key => hasParamValue(params, key)));
+      if (!satisfied) errors.push({ message: requirement.message || `${ruleLabel} 工具缺少一组必填字段`, issue: 'missing_one_of', one_of: requirement.one_of });
     }
   }
   return errors;
