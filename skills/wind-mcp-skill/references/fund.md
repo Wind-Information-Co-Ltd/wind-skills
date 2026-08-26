@@ -32,6 +32,7 @@
 | `begin_date` | 是 | string | — | — | 开始日期：必须显式填写绝对日期，格式 yyyy-MM-dd，如 2026-03-25。 |
 | `end_date` | 是 | string | — | — | 结束日期：必须显式填写绝对日期，格式 yyyy-MM-dd，如 2026-03-25。 |
 | `period` | 否 | string | 1min / 5min / 10min / 15min / 30min / 60min / 120min / 240min / 1d / 1w / 1mo / 1y / 1q / 6mo | 默认："1d" | K 线周期。 |
+| `count` | 否 | integer | — | 默认 0 | 在开始/结束日期区间内取数的条数（整数）：正数从开始日期往后取 N 条，负数从结束日期往前取 N 条，0 取区间全部；不会超出日期区间。 |
 | `aftype` | 否 | string | 0 / 1 / 2 | 默认 0 | 复权类型：0=前复权，1=后复权，2=不复权。前复权更常用 |
 | `issusp` | 否 | string | — | 默认 1 | 是否包含停牌数据：0=不包含，1=包含 |
 | `afdate` | 否 | string | — | — | 复权基准日期，格式 yyyy-MM-dd，如 2026-03-25。通常不需要指定。 |
@@ -69,6 +70,7 @@
 | `windcode` | 是 | string | — | — | 基金名称或者基金代码，如588200.SH。|
 | `begin` | 否 | string | — | — | 开始日期，格式 yyyy-MM-dd，如 2026-03-25；未指定默认最新交易日。不可只传 end 不传 begin。|
 | `end` | 否 | string | — | — | 结束日期，格式 yyyy-MM-dd，如 2026-03-25；未指定默认最新交易日（即只传 begin 时返回 begin 至最新交易日的区间）。|
+| `count` | 否 | integer | — | 默认 0 | 在 begin/end 区间内取数的条数（整数）：正数从 begin 往后取 N 条，负数从 end 往前取 N 条，0 取区间全部；不会超出区间；未指定 begin/end 时按默认最新交易日计。|
 
 ### `get_fund_info`
 

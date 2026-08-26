@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
 // #region 静态：版本、7 个 MCP 地址、路径、HTTP 状态码映射。只含常量，不发网络。
-const SKILL_VERSION = '2.0.3';
+const SKILL_VERSION = '2.0.4';
 
 // 本地 registry: 工具选择可在任何网络调用前失败
 const SERVERS = {
@@ -59,7 +59,7 @@ const CALL_EXAMPLES = [
   `cli.mjs call stock_data get_stock_basicinfo '{"question":"600519.SH公司基本档案"}'`,
   `cli.mjs call stock_data get_stock_price_indicators '{"windcode":"600519.SH","indexes":"中文简称,最新成交价,涨跌幅"}'`,
   `cli.mjs call fund_data get_fund_kline '{"windcode":"588200.SH","begin_date":"2026-04-01","end_date":"2026-04-30"}'`,
-  `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O","begin":"2026-08-05","end":"2026-08-05"}'`,
+  `cli.mjs call stock_data get_stock_quote '{"windcode":"AAPL.O","begin":"2026-08-05","end":"2026-08-05","count":-30}'`,
   `cli.mjs call index_data get_index_kline '{"windcode":"000300.SH","begin_date":"2026-04-01","end_date":"2026-04-30"}'`,
   `cli.mjs call financial_docs get_financial_news '{"query":"美联储利率政策","top_k":3}'`,
   `cli.mjs call economic_data search_economic_indicator '{"question":"中国GDP相关指标有哪些"}'`,
@@ -442,6 +442,10 @@ function normalizeCall(server_type, toolName, args) {
   const normalizationErrors = [];
   if (typeof normalizedArgs.indexes === 'string') normalizedArgs.indexes = normalizeIndexes(normalizedArgs.indexes);
   if (typeof normalizedArgs.windcode === 'string') normalizedArgs.windcode = normalizeWindcode(normalizedArgs.windcode);
+  // count 是整型字段：把整数字符串收敛成 number，非整数原样留给 patterns 校验拦截。
+  if (typeof normalizedArgs.count === 'string' && /^-?\d+$/.test(normalizedArgs.count.trim())) {
+    normalizedArgs.count = Number(normalizedArgs.count.trim());
+  }
   if (KLINE_TOOLS.has(toolName) && normalizedArgs.period === undefined) normalizedArgs.period = '1d';
   if (typeof normalizedArgs.period === 'string') {
     const key = normalizedArgs.period.trim();

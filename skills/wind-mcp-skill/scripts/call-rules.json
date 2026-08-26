@@ -1,5 +1,5 @@
 {
-  "schema_version": 14,
+  "schema_version": 18,
   "description": "Runtime normalization and validation rules for Wind MCP tool calls.",
   "kline_period_map": {
     "1min": "1",
@@ -107,6 +107,12 @@
           "values": ["0", "1"],
           "message": "字段 'issusp' 只能是 '0' 或 '1'"
         }
+      },
+      "patterns": {
+        "count": {
+          "pattern": "^-?\\d+$",
+          "message": "字段 'count' 只能是整数：正数从开始日期往后取 N 条，负数从结束日期往前取 N 条，0 取区间全部"
+        }
       }
     },
     {
@@ -114,7 +120,13 @@
       "label": "分钟行情",
       "tools": ["get_stock_quote", "get_fund_quote", "get_index_quote"],
       "required": ["windcode"],
-      "ordered_dates": [["begin", "end"]]
+      "ordered_dates": [["begin", "end"]],
+      "patterns": {
+        "count": {
+          "pattern": "^-?\\d+$",
+          "message": "字段 'count' 只能是整数：正数从 begin 往后取 N 条，负数从 end 往前取 N 条，0 取区间全部"
+        }
+      }
     },
     {
       "name": "economic_search",
